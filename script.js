@@ -1,2121 +1,4227 @@
-/* ============================================================
-   script_onebyone.js  —  Modo Una Pregunta Por Vez
-   
-   CÓMO INTEGRAR:
-   Agregar este script DESPUÉS de script.js en index.html:
-      <script src="script.js"></script>
-      <script src="script_onebyone.js"></script>
-   ============================================================ */
+/* ========== script.js ========== */
+
+// Variable global de preguntas — se llena desde Firestore (ya no viene de preguntasiar.js)
+if (typeof preguntasPorSeccion === 'undefined') {
+  var preguntasPorSeccion = {};
+}
+
+// ======== URL BASE PARA IMÁGENES ========
+// En servidor local usa ruta relativa; en producción apunta a GitHub Pages.
+const IMAGENES_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.startsWith('192.168.'))
+  ? ''
+  : 'https://examenesiar.github.io/';
+
+function getImagenUrl(path) {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  return IMAGENES_BASE_URL + path;
+}
+/* Requisitos:
+   1) Orden de preguntas ALEATORIO al inicio; orden de opciones aleatorio por pregunta.
+      - Las preguntas se mezclan al inicio de cada intento
+      - Las preguntas respondidas quedan arriba
+      - Las preguntas sin responder se mantienen abajo en orden aleatorio
+   2) Progreso y selecciones persistentes en localStorage hasta completar el cuestionario.
+      se limpia el estado para permitir un nuevo intento.
+   5) Cada pregunta tiene botón "Responder"; pinta verde/rojo y marca "✅/❌".
+   6) Botón flotante "Ver mi progreso" con ventana flotante.
+   7) Mantener posición de scroll al regresar al menú principal.
+   8) Navegación con botones del navegador (atrás/adelante).
+*/
 
 (function () {
-  'use strict';
+  // ======== Claves de almacenamiento ========
+  const STORAGE_KEY = "quiz_state_v3";             // Estado persistente por sección (v3 para nueva funcionalidad)
+  const ATTEMPT_LOG_KEY = "quiz_attempt_log_v1";   // Historial de intentos
+  const SCROLL_POSITION_KEY = "quiz_scroll_position_v1"; // Posición del scroll
 
-  // ── URL base para imágenes (mismo criterio que script.js) ──
-  const IMAGENES_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.startsWith('192.168.'))
-    ? ''
-    : 'https://examenesiar.github.io/';
+  // ======== Estado en memoria (se sincroniza con localStorage Y Firestore) ========
+  // Estructura por sección:
+  // state[seccionId] = {
+  //   shuffleFrozen: false,
+  //   shuffleMap: { [qIndex]: { [mixedIndex]: originalIndex } },
+  //   questionOrder: [array de índices de preguntas mezclados],
+  //   answers: { [qIndex]: [mixedIndicesSeleccionados] },
+  //   graded: { [qIndex]: true|false },
+  //   totalShown: false,
+  //   explanationShown: { [qIndex]: true|false }  // si se mostró la explicación
+  // }
+  let state = loadJSON(STORAGE_KEY, {});
+  let attemptLog = loadJSON(ATTEMPT_LOG_KEY, []);
 
-  function getImagenUrl(path) {
-    if (!path) return '';
-    if (path.startsWith('http://') || path.startsWith('https://')) return path;
-    return IMAGENES_BASE_URL + path;
-  }
+  // ======== SINCRONIZACIÓN CON FIRESTORE ========
+  // Ruta: progreso/{uid}/secciones/{seccionId}  → estado del cuestionario
+  //        progreso/{uid}/historial              → { entries: [...] }
+  //        progreso/{uid}/completados            → { [seccionId]: true }
 
+  let _firestoreUID = null;     // UID del usuario autenticado
+  let _firestoreDB  = null;     // instancia de Firestore (se inyecta desde firebase-auth.js)
+  let _pendingFSSave = {};      // { [seccionId]: timeoutId } — debounce por sección
+  const FS_DEBOUNCE_MS = 1500;  // ms de espera antes de escribir en Firestore
 
-  /* ── Inyectar estilos ── */
-  const STYLE_ID = 'iar-onebyone-styles';
-  if (!document.getElementById(STYLE_ID)) {
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = `
-      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
-
-      /* ── Variables ── */
-      .oav-wrapper {
-        font-family: 'DM Sans', system-ui, sans-serif;
-        max-width: 780px;
-        margin: 0 auto;
-        padding: 0 0 32px;
-        --oav-blue:    #2563eb;
-        --oav-blue-dk: #1d4ed8;
-        --oav-blue-lt: #eff6ff;
-        --oav-green:   #059669;
-        --oav-green-lt:#ecfdf5;
-        --oav-red:     #dc2626;
-        --oav-red-lt:  #fff1f2;
-        --oav-border:  #e2e8f0;
-        --oav-text:    #1e293b;
-        --oav-muted:   #64748b;
-        --oav-radius:  12px;
-        --oav-shadow:  0 2px 16px rgba(37,99,235,0.07), 0 1px 3px rgba(0,0,0,0.05);
-      }
-
-      /* ── Header de progreso — más compacto ── */
-      .oav-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 12px;
-        padding: 10px 14px;
-        background: #fff;
-        border-radius: var(--oav-radius);
-        box-shadow: var(--oav-shadow);
-        border: 1px solid var(--oav-border);
-      }
-      .oav-counter {
-        flex-shrink: 0;
-        display: flex;
-        align-items: baseline;
-        gap: 3px;
-        min-width: 0;
-      }
-      .oav-counter-num {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: var(--oav-blue);
-        line-height: 1;
-        letter-spacing: -0.5px;
-      }
-      .oav-counter-total {
-        font-size: 0.68rem;
-        color: var(--oav-muted);
-        font-weight: 500;
-        white-space: nowrap;
-      }
-      .oav-header-divider {
-        width: 1px;
-        height: 24px;
-        background: var(--oav-border);
-        flex-shrink: 0;
-      }
-      .oav-progress-col {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-        min-width: 0;
-      }
-      .oav-stats {
-        display: flex;
-        gap: 5px;
-        flex-wrap: wrap;
-      }
-      .oav-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 3px;
-        padding: 1px 7px;
-        border-radius: 100px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        letter-spacing: 0.01em;
-        line-height: 1.6;
-      }
-      .oav-chip-correct  { background: var(--oav-green-lt); color: var(--oav-green); border: 1px solid #a7f3d0; }
-      .oav-chip-wrong    { background: var(--oav-red-lt);   color: var(--oav-red);   border: 1px solid #fecaca; }
-      .oav-chip-pending  { background: #f1f5f9; color: var(--oav-muted); border: 1px solid #e2e8f0; }
-      .oav-chip-pending-active {
-        background: #fefce8;
-        color: #92400e;
-        border: 1px solid #fde68a;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        user-select: none;
-      }
-      .oav-chip-pending-active:hover {
-        background: #fef08a;
-        border-color: #eab308;
-        color: #713f12;
-        transform: translateY(-1px);
-        box-shadow: 0 2px 6px rgba(234,179,8,0.25);
-      }
-      .oav-chip-pending-active:active { transform: scale(0.96); }
-      .oav-bar-track {
-        width: 100%;
-        height: 5px;
-        background: #f1f5f9;
-        border-radius: 100px;
-        overflow: hidden;
-        position: relative;
-      }
-      .oav-bar-fill {
-        position: absolute;
-        left: 0; top: 0; bottom: 0;
-        border-radius: 100px;
-        transition: width 0.45s cubic-bezier(.4,0,.2,1);
-      }
-      .oav-bar-correct  { background: linear-gradient(90deg, #059669, #34d399); }
-      .oav-bar-wrong    { background: linear-gradient(90deg, #dc2626, #f87171); }
-      .oav-bar-answered { background: linear-gradient(90deg, #2563eb, #60a5fa); }
-      .oav-status-icon {
-        flex-shrink: 0;
-        width: 28px;
-        height: 28px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.85rem;
-        font-weight: 700;
-        transition: all 0.3s ease;
-      }
-      .oav-status-unanswered { background: #f1f5f9; border: 2px dashed #cbd5e1; color: #94a3b8; }
-      .oav-status-correct    { background: var(--oav-green-lt); border: 2px solid #34d399; color: var(--oav-green); }
-      .oav-status-wrong      { background: var(--oav-red-lt);   border: 2px solid #f87171; color: var(--oav-red); }
-
-      /* ── Card principal ── */
-      .oav-card {
-        background: #fff;
-        border-radius: var(--oav-radius);
-        box-shadow: var(--oav-shadow);
-        border: 1px solid var(--oav-border);
-        overflow: hidden;
-        animation: oav-slide-in 0.22s cubic-bezier(.4,0,.2,1);
-      }
-      @keyframes oav-slide-in {
-        from { opacity: 0; transform: translateY(8px); }
-        to   { opacity: 1; transform: translateY(0); }
-      }
-      .oav-card-body { padding: 18px 20px 14px; }
-      .oav-question-label {
-        font-size: 0.68rem;
-        font-family: 'DM Sans', sans-serif;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--oav-blue);
-        display: block;
-        margin-bottom: 6px;
-      }
-      .oav-question-text {
-        font-family: 'Lora', Georgia, serif;
-        font-size: 0.96rem;
-        line-height: 1.58;
-        color: var(--oav-text);
-        margin-bottom: 14px;
-      }
-      .oav-question-img {
-        display: block;
-        max-width: 100%;
-        height: auto;
-        border-radius: 8px;
-        border: 1px solid var(--oav-border);
-        margin: 0 auto 14px;
-        cursor: pointer;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-        transition: opacity 0.2s;
-      }
-      .oav-question-img:hover { opacity: 0.88; }
-
-      /* ── Opciones ── */
-      .oav-options {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        margin-bottom: 0;
-      }
-      .oav-option {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 9px 13px;
-        border-radius: 8px;
-        border: 1.5px solid var(--oav-border);
-        background: #fafafa;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        position: relative;
-        user-select: none;
-      }
-      .oav-option:hover:not(.oav-option-disabled) {
-        border-color: var(--oav-blue);
-        background: var(--oav-blue-lt);
-        transform: translateX(2px);
-      }
-      .oav-option.oav-option-selected:not(.oav-option-disabled) {
-        border-color: var(--oav-blue);
-        background: var(--oav-blue-lt);
-      }
-      .oav-option.oav-option-correct {
-        border-color: #059669 !important;
-        background: var(--oav-green-lt) !important;
-      }
-      .oav-option.oav-option-wrong {
-        border-color: #dc2626 !important;
-        background: var(--oav-red-lt) !important;
-      }
-      .oav-option.oav-option-disabled { cursor: default; }
-
-      .oav-option-letter {
-        flex-shrink: 0;
-        width: 22px;
-        height: 22px;
-        border-radius: 50%;
-        border: 1.5px solid #cbd5e1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.65rem;
-        font-weight: 700;
-        color: var(--oav-muted);
-        transition: all 0.15s ease;
-      }
-      .oav-option:hover:not(.oav-option-disabled) .oav-option-letter,
-      .oav-option.oav-option-selected .oav-option-letter {
-        color: var(--oav-blue);
-        border-color: var(--oav-blue);
-        background: var(--oav-blue-lt);
-      }
-      .oav-option.oav-option-correct .oav-option-letter {
-        color: var(--oav-green) !important;
-        border-color: var(--oav-green) !important;
-        background: #d1fae5 !important;
-      }
-      .oav-option.oav-option-wrong .oav-option-letter {
-        color: var(--oav-red) !important;
-        border-color: var(--oav-red) !important;
-        background: #fee2e2 !important;
-      }
-      .oav-option input[type="radio"],
-      .oav-option input[type="checkbox"] {
-        position: absolute;
-        opacity: 0;
-        pointer-events: none;
-        width: 0; height: 0;
-      }
-      .oav-option-text {
-        flex: 1;
-        font-size: 0.87rem;
-        line-height: 1.45;
-        color: var(--oav-text);
-      }
-      .oav-option-icon {
-        flex-shrink: 0;
-        font-size: 0.85rem;
-        opacity: 0;
-        transition: opacity 0.2s;
-        font-weight: 700;
-      }
-      .oav-option.oav-option-correct .oav-option-icon { opacity: 1; color: var(--oav-green); }
-      .oav-option.oav-option-wrong    .oav-option-icon { opacity: 1; color: var(--oav-red); }
-
-      /* ── Badge resultado ── */
-      .oav-result-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 4px 11px;
-        border-radius: 100px;
-        font-size: 0.75rem;
-        font-weight: 700;
-        margin-top: 10px;
-        letter-spacing: 0.02em;
-        animation: oav-pop 0.25s cubic-bezier(.4,0,.2,1);
-      }
-      @keyframes oav-pop {
-        from { opacity: 0; transform: scale(0.88); }
-        to   { opacity: 1; transform: scale(1); }
-      }
-      .oav-result-correct { background: var(--oav-green-lt); color: var(--oav-green); border: 1.5px solid #a7f3d0; }
-      .oav-result-wrong   { background: var(--oav-red-lt);   color: var(--oav-red);   border: 1.5px solid #fecaca; }
-
-      /* ── Footer de la card ── */
-      .oav-card-footer {
-        padding: 11px 20px 16px;
-        border-top: 1px solid var(--oav-border);
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        background: #fafbfc;
-      }
-      .oav-btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
-      .oav-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 8px 18px;
-        border-radius: 7px;
-        font-family: 'DM Sans', sans-serif;
-        font-size: 0.83rem;
-        font-weight: 600;
-        cursor: pointer;
-        border: none;
-        transition: all 0.15s ease;
-        letter-spacing: 0.01em;
-      }
-      .oav-btn:active { transform: scale(0.97); }
-      .oav-btn-primary {
-        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-        color: #fff;
-        box-shadow: 0 2px 6px rgba(37,99,235,0.25);
-      }
-      .oav-btn-primary:hover:not(:disabled) {
-        background: linear-gradient(135deg, #1d4ed8 0%, #1e3a8a 100%);
-        box-shadow: 0 4px 10px rgba(37,99,235,0.32);
-        transform: translateY(-1px);
-      }
-      .oav-btn-primary:disabled { opacity: 0.42; cursor: not-allowed; box-shadow: none; transform: none; }
-      .oav-btn-ghost {
-        background: transparent;
-        color: var(--oav-blue);
-        border: 1.5px solid #bfdbfe;
-        font-size: 0.81rem;
-      }
-      .oav-btn-ghost:hover:not(:disabled) { background: var(--oav-blue-lt); border-color: var(--oav-blue); }
-      .oav-btn-ghost:disabled { opacity: 0.38; cursor: not-allowed; }
-
-      /* ── Explicación ── */
-      .oav-explanation {
-        padding: 10px 14px;
-        border-radius: 8px;
-        background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
-        border-left: 3px solid var(--oav-blue);
-        animation: oav-slide-in 0.25s ease;
-      }
-      .oav-explanation-title {
-        font-size: 0.67rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--oav-blue);
-        margin-bottom: 5px;
-      }
-      .oav-explanation-text {
-        font-size: 0.85rem;
-        line-height: 1.58;
-        color: var(--oav-text);
-        margin: 0;
-      }
-      .oav-explanation img {
-        display: block;
-        max-width: 100%;
-        border-radius: 6px;
-        margin-top: 10px;
-        cursor: pointer;
-        border: 1px solid var(--oav-border);
-      }
-
-      /* ── Navegación ── */
-      .oav-nav {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-top: 10px;
-      }
-      .oav-nav-btn {
-        flex-shrink: 0;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 9px 16px;
-        border-radius: 8px;
-        font-family: 'DM Sans', sans-serif;
-        font-size: 0.83rem;
-        font-weight: 600;
-        cursor: pointer;
-        border: 1.5px solid var(--oav-border);
-        background: #fff;
-        color: var(--oav-text);
-        transition: all 0.15s ease;
-        box-shadow: var(--oav-shadow);
-        white-space: nowrap;
-      }
-      .oav-nav-btn:hover:not(:disabled) {
-        border-color: var(--oav-blue);
-        color: var(--oav-blue);
-        background: var(--oav-blue-lt);
-        transform: translateY(-1px);
-      }
-      .oav-nav-btn:disabled { opacity: 0.32; cursor: not-allowed; box-shadow: none; transform: none; }
-      .oav-nav-btn-next {
-        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-        color: #fff;
-        border-color: transparent;
-        box-shadow: 0 2px 6px rgba(37,99,235,0.25);
-      }
-      .oav-nav-btn-next:hover:not(:disabled) {
-        background: linear-gradient(135deg, #1d4ed8 0%, #1e3a8a 100%);
-        color: #fff;
-        border-color: transparent;
-        box-shadow: 0 4px 10px rgba(37,99,235,0.32);
-        transform: translateY(-1px);
-      }
-
-      /* ── Mini-mapa: barra de segmentos horizontal ── */
-      .oav-minimap {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        gap: 2px;
-        overflow: hidden;
-        min-width: 0;
-      }
-      .oav-dot {
-        flex: 1;
-        height: 6px;
-        border-radius: 100px;
-        background: #e2e8f0;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        position: relative;
-        min-width: 4px;
-      }
-      .oav-dot:hover         { background: #93c5fd; transform: scaleY(1.5); }
-      .oav-dot-current       { background: var(--oav-blue); transform: scaleY(1.8); border-radius: 4px; }
-      .oav-dot-correct       { background: var(--oav-green); }
-      .oav-dot-wrong         { background: var(--oav-red); }
-      .oav-dot-pending-pulse {
-        animation: oav-dot-pulse 1.8s ease-in-out infinite;
-      }
-      @keyframes oav-dot-pulse {
-        0%, 100% { background: #e2e8f0; transform: scaleY(1);   }
-        50%       { background: #fbbf24; transform: scaleY(1.7); }
-      }
-      /* tooltip del número al hacer hover */
-      .oav-dot::after {
-        content: attr(data-num);
-        position: absolute;
-        bottom: calc(100% + 5px);
-        left: 50%;
-        transform: translateX(-50%);
-        background: #1e293b;
-        color: #fff;
-        font-size: 0.6rem;
-        font-weight: 700;
-        padding: 2px 5px;
-        border-radius: 4px;
-        white-space: nowrap;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.15s;
-        font-family: 'DM Sans', sans-serif;
-      }
-      .oav-dot:hover::after  { opacity: 1; }
-      .oav-dot-current::after { opacity: 1; background: var(--oav-blue); }
-
-      /* ── Pantalla resultado final ── */
-      .oav-result-screen {
-        background: #fff;
-        border-radius: var(--oav-radius);
-        box-shadow: var(--oav-shadow);
-        border: 1px solid var(--oav-border);
-        padding: 28px 24px;
-        text-align: center;
-        animation: oav-slide-in 0.3s ease;
-      }
-      .oav-result-icon   { font-size: 2.8rem; margin-bottom: 8px; line-height: 1; }
-      .oav-result-score  { font-size: 2.2rem; font-weight: 700; color: var(--oav-blue); letter-spacing: -1px; line-height: 1; margin-bottom: 3px; }
-      .oav-result-label  { font-size: 0.82rem; color: var(--oav-muted); font-weight: 500; margin-bottom: 18px; }
-      .oav-result-bar-wrap {
-        height: 8px;
-        background: #f1f5f9;
-        border-radius: 100px;
-        overflow: hidden;
-        margin-bottom: 18px;
-        max-width: 280px;
-        margin-left: auto;
-        margin-right: auto;
-      }
-      .oav-result-bar-fill { height: 100%; border-radius: 100px; transition: width 1s cubic-bezier(.4,0,.2,1); }
-      .oav-result-phrase {
-        font-size: 0.88rem;
-        line-height: 1.6;
-        color: var(--oav-text);
-        background: var(--oav-blue-lt);
-        border-left: 3px solid var(--oav-blue);
-        border-radius: 8px;
-        padding: 11px 14px;
-        text-align: left;
-        margin-bottom: 20px;
-      }
-      .oav-result-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
-
-      /* ── Responsive mobile ── */
-      @media (max-width: 540px) {
-        .oav-card-body    { padding: 14px 14px 11px; }
-        .oav-card-footer  { padding: 9px 14px 13px; }
-        .oav-question-text { font-size: 0.91rem; }
-        .oav-option-text  { font-size: 0.84rem; }
-        .oav-header       { padding: 8px 11px; gap: 8px; }
-        .oav-counter-num  { font-size: 1.05rem; }
-        .oav-nav-btn      { padding: 8px 12px; font-size: 0.79rem; }
-        .oav-result-screen { padding: 20px 14px; }
-        .oav-result-score  { font-size: 1.8rem; }
-        .oav-dot           { height: 5px; }
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
-  /* ─────────────────────────────────────────────────────────
-     ESTADO
-  ───────────────────────────────────────────────────────── */
-  const oavState = {};
-  window.oavState = oavState;
-
-  // Marcas temporales de sesión: { [seccionId]: { [qIndex]: [texto1, texto2, ...] } }
-  // Solo viven en memoria. Se borran al salir del cuestionario o al reiniciar.
-  // NO incluyen preguntas ya respondidas (graded).
-  const _sessionMarks = {};
-  window._oavSessionMarks = _sessionMarks;
-
-  function _getSessionMark(seccionId, qIndex) {
-    return (_sessionMarks[seccionId] && _sessionMarks[seccionId][qIndex]) || [];
-  }
-  function _setSessionMark(seccionId, qIndex, textos) {
-    if (!_sessionMarks[seccionId]) _sessionMarks[seccionId] = {};
-    _sessionMarks[seccionId][qIndex] = textos;
-  }
-  function _clearSessionMarks(seccionId) {
-    delete _sessionMarks[seccionId];
-  }
-  window._oavGetCurrentIdx = function(seccionId) {
-    if (!oavState[seccionId]) return null;
-    var idx = oavState[seccionId].currentIdx;
-    return (typeof idx === 'number') ? idx : null;
+  // firebase-auth.js inyecta estas referencias una vez que el usuario está autenticado
+  window._setFirestoreSync = function(uid, dbInstance) {
+    // Si se está cerrando sesión (uid=null), limpiar historial local de la sesión anterior
+    if (!uid) {
+      attemptLog = [];
+      localStorage.removeItem(ATTEMPT_LOG_KEY);
+      console.log('[IAR Sync] 🧹 Historial local limpiado al cerrar sesión');
+    }
+    _firestoreUID = uid;
+    _firestoreDB  = dbInstance;
   };
-  const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  const OAV_NAV_KEY = 'oav_current_idx_v1';
 
-  function _saveCurrentIdx(seccionId, idx) {
-    try {
-      const all = JSON.parse(localStorage.getItem(OAV_NAV_KEY) || '{}');
-      all[seccionId] = idx;
-      localStorage.setItem(OAV_NAV_KEY, JSON.stringify(all));
-    } catch(e) {}
-  }
-  function _loadCurrentIdx(seccionId) {
-    try {
-      const all = JSON.parse(localStorage.getItem(OAV_NAV_KEY) || '{}');
-      return typeof all[seccionId] === 'number' ? all[seccionId] : null;
-    } catch(e) { return null; }
-  }
-  function _clearCurrentIdx(seccionId) {
-    try {
-      const all = JSON.parse(localStorage.getItem(OAV_NAV_KEY) || '{}');
-      delete all[seccionId];
-      localStorage.setItem(OAV_NAV_KEY, JSON.stringify(all));
-    } catch(e) {}
+  // ---- Helpers de Firestore dinámica ----
+  async function _fsDoc(path) {
+    // path: array de strings, ej. ['progreso', uid, 'secciones', seccionId]
+    const { doc, getFirestore } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    return doc(_firestoreDB, ...path);
   }
 
-  /* ─────────────────────────────────────────────────────────
-     HELPERS
-  ───────────────────────────────────────────────────────── */
-  function isOAVSection(seccionId) {
-    if (!seccionId) return false;
-    const esIAR = seccionId.startsWith('iar') || seccionId.toLowerCase().includes('iar');
-    const esSimulacro = seccionId === 'simulacro_iar';
-    return esIAR || esSimulacro;
-  }
-
-  function getQuizState(seccionId) {
-    try {
-      const raw = localStorage.getItem('quiz_state_v3');
-      if (!raw) return null;
-      return JSON.parse(raw)[seccionId] || null;
-    } catch (e) { return null; }
-  }
-
-  function getScores(seccionId) {
-    // Si ya hay puntajes en memoria para esta sección, usarlos
-    if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionId]) {
-      const scores = window.puntajesPorSeccion[seccionId];
-      // Verificar que no son todos null (memoria vacía tras recarga)
-      const tieneAlgo = scores.some(v => v !== null && v !== undefined);
-      if (tieneAlgo) return scores;
-    }
-
-    // Memoria vacía o sin datos → reconstruir desde localStorage
-    const preguntas = window.preguntasPorSeccion && window.preguntasPorSeccion[seccionId];
-    if (!preguntas || preguntas.length === 0) return [];
-
-    const s = getQuizState(seccionId);
-    if (!s || !s.graded || !s.shuffleMap) return Array(preguntas.length).fill(null);
-
-    // Reconstruir puntaje para cada pregunta calificada
-    const scores = Array(preguntas.length).fill(null);
-    preguntas.forEach(function(preg, idx) {
-      if (!s.graded[idx]) return;
-      const inv = s.shuffleMap[idx];
-      if (!inv) return;
-      const guardadas = (s.answers && s.answers[idx]) || [];
-      const selOriginal = guardadas.map(function(mi) { return inv[mi]; }).sort(function(a,b){return a-b;});
-      const correctaOriginal = preg.correcta.slice().sort(function(a,b){return a-b;});
-      scores[idx] = JSON.stringify(selOriginal) === JSON.stringify(correctaOriginal) ? 1 : 0;
-    });
-
-    // Guardar en memoria para no tener que recalcular
-    if (!window.puntajesPorSeccion) window.puntajesPorSeccion = {};
-    window.puntajesPorSeccion[seccionId] = scores;
-    return scores;
-  }
-
-  function getQuestionStatus(seccionId, idx) {
-    const v = getScores(seccionId)[idx];
-    if (v === null || v === undefined) return 'pending';
-    return v === 1 ? 'correct' : 'wrong';
-  }
-
-  function getShuffledOptions(seccionId, idx, opciones) {
-    // 1) Si la pregunta YA fue respondida (graded) → usar el shuffleMap congelado
-    const s = getQuizState(seccionId);
-    const isGraded = s && s.graded && s.graded[idx];
-
-    if (isGraded && s.shuffleMap && s.shuffleMap[idx]) {
-      const inv = s.shuffleMap[idx];
-      return Object.keys(inv).sort((a, b) => +a - +b).map(k => ({
-        text: opciones[inv[k]], originalIndex: inv[k], mixedIndex: +k
-      }));
-    }
-
-    // 2) Pregunta NO respondida → generar mezcla aleatoria NUEVA cada vez
-    //    NUNCA persistir en localStorage: se congela solo al presionar "Responder"
-    var indices = opciones.map(function(_, i) { return i; });
-    var seed = (Date.now() + idx * 7919 + (Math.random() * 1e9 | 0)) >>> 0;
-    function rng() {
-      seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
-      return (seed >>> 0) / 0xFFFFFFFF;
-    }
-    for (var i = indices.length - 1; i > 0; i--) {
-      var j = Math.floor(rng() * (i + 1));
-      var tmp = indices[i]; indices[i] = indices[j]; indices[j] = tmp;
-    }
-
-    return indices.map(function(origIdx, mixedIdx) {
-      return { text: opciones[origIdx], originalIndex: origIdx, mixedIndex: mixedIdx };
-    });
-  }
-
-  // Para preguntas RESPONDIDAS: devuelve los mixedIndex guardados en localStorage (posición congelada)
-  // Para preguntas NO respondidas: devuelve los mixedIndex que corresponden a los textos marcados en sesión
-  function getRestoredAnswers(seccionId, idx, shuffledOptions) {
-    const s = getQuizState(seccionId);
-    const isGraded = s && s.graded && s.graded[idx];
-
-    if (isGraded) {
-      // Pregunta respondida: usar posiciones congeladas en localStorage
-      if (!s || !s.answers || !s.answers[idx]) return [];
-      return s.answers[idx];
-    }
-
-    // Pregunta NO respondida: buscar marcas de sesión por texto
-    const sessionTextos = _getSessionMark(seccionId, idx);
-    if (!sessionTextos || sessionTextos.length === 0) return [];
-
-    // Mapear texto marcado → mixedIndex en el orden actual de shuffledOptions
-    const marcados = [];
-    if (shuffledOptions) {
-      sessionTextos.forEach(function(texto) {
-        const opt = shuffledOptions.find(function(o) { return o.text === texto; });
-        if (opt !== undefined) marcados.push(opt.mixedIndex);
-      });
-    }
-    return marcados;
-  }
-
-  function escapeHTML(str) {
-    if (typeof str !== 'string') return String(str || '');
-    return str
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
-
-  /* ─────────────────────────────────────────────────────────
-     RENDER PRINCIPAL
-  ───────────────────────────────────────────────────────── */
-  function renderOAV(seccionId) {
-    const preguntas = window.preguntasPorSeccion && window.preguntasPorSeccion[seccionId];
-    if (!preguntas || preguntas.length === 0) return;
-
-    const cont = document.getElementById('cuestionario-' + seccionId);
-    if (!cont) return;
-
-    // Al entrar a un cuestionario (carga nueva), borrar marcas de sesión previas.
-    // Las marcas solo sobreviven mientras el usuario navega DENTRO del mismo cuestionario
-    // sin salir (Caso 7). Si renderOAV se llama es porque se está cargando desde afuera.
-    // Excepción: si ya existe oavState para esta sección (re-render interno), conservarlas.
-    const esCargaNueva = !oavState[seccionId];
-    if (esCargaNueva) {
-      _clearSessionMarks(seccionId);
-    }
-
-    if (!oavState[seccionId]) {
-      oavState[seccionId] = { currentIdx: 0, total: preguntas.length };
-    } else {
-      oavState[seccionId].total = preguntas.length;
-    }
-
-    const scores = getScores(seccionId);
-    const allAnswered = scores.length === preguntas.length && scores.every(v => v !== null && v !== undefined);
-
-    // Prioridad 1: buscador
-    if (typeof window._buscadorTargetIdx === 'number' && window._buscadorTargetIdx >= 0) {
-      oavState[seccionId].currentIdx = window._buscadorTargetIdx;
-      window._buscadorTargetIdx = null;
-      _clearCurrentIdx(seccionId);
-    }
-    // Prioridad 2: índice guardado en localStorage (el usuario navegó y salió)
-    else if (!allAnswered) {
-      const savedIdx = _loadCurrentIdx(seccionId);
-      if (savedIdx !== null && savedIdx >= 0 && savedIdx < preguntas.length) {
-        oavState[seccionId].currentIdx = savedIdx;
-      } else {
-        // Primera vez: ir a la primera sin calificar
-        const firstUnanswered = preguntas.findIndex((_, i) => {
-          const v = scores[i]; return v === null || v === undefined;
-        });
-        if (firstUnanswered >= 0) oavState[seccionId].currentIdx = firstUnanswered;
+  // ---- Guardar estado de UNA sección en Firestore (con debounce) ----
+  function _guardarSeccionFirestore(seccionId) {
+    if (!_firestoreUID || !_firestoreDB) return;
+    // Cancelar el timeout anterior si existe
+    if (_pendingFSSave[seccionId]) clearTimeout(_pendingFSSave[seccionId]);
+    _pendingFSSave[seccionId] = setTimeout(async () => {
+      delete _pendingFSSave[seccionId];
+      try {
+        const { doc, setDoc, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+        // IMPORTANTE: leer SIEMPRE desde localStorage (fuente de verdad local)
+        // porque script_onebyone.js escribe ahí directamente sin actualizar state en memoria.
+        const rawState = localStorage.getItem(STORAGE_KEY);
+        const allState = rawState ? JSON.parse(rawState) : {};
+        const secData = allState[seccionId];
+        if (!secData) return;
+        const docRef = doc(_firestoreDB, 'progreso', _firestoreUID, 'secciones', seccionId);
+        await setDoc(docRef, { ...secData, _ts: serverTimestamp() });
+        console.log('[IAR Sync] ✅ Sección guardada en Firestore:', seccionId);
+      } catch(err) {
+        console.warn('[IAR Sync] ⚠️ Error guardando sección en Firestore:', seccionId, err.code || err.message);
       }
-    } else {
-      oavState[seccionId].currentIdx = 0;
-      _clearCurrentIdx(seccionId);
+    }, FS_DEBOUNCE_MS);
+  }
+
+  // ---- Versión inmediata (sin debounce) para uso desde script_onebyone.js ----
+  async function _guardarSeccionFirestoreInmediato(seccionId) {
+    if (!_firestoreUID || !_firestoreDB) return;
+    // Cancelar debounce pendiente si existe
+    if (_pendingFSSave[seccionId]) {
+      clearTimeout(_pendingFSSave[seccionId]);
+      delete _pendingFSSave[seccionId];
     }
-
-    cont.innerHTML = '';
-    const wrapper = document.createElement('div');
-    wrapper.className = 'oav-wrapper';
-    wrapper.id = 'oav-wrapper-' + seccionId;
-    cont.appendChild(wrapper);
-
-    const _desdeBuscador = typeof window._buscadorQueryPendiente === 'string';
-    if (allAnswered && !_desdeBuscador) {
-      _mostrarResultadoFinalOAV(seccionId);
-    } else {
-      renderOAVPage(seccionId);
+    try {
+      const { doc, setDoc, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      // Leer desde localStorage (fuente de verdad local)
+      const rawState = localStorage.getItem(STORAGE_KEY);
+      const allState = rawState ? JSON.parse(rawState) : {};
+      const secData = allState[seccionId];
+      if (!secData) return;
+      const docRef = doc(_firestoreDB, 'progreso', _firestoreUID, 'secciones', seccionId);
+      await setDoc(docRef, { ...secData, _ts: serverTimestamp() });
+      console.log('[IAR Sync] ✅ (inmediato) Sección guardada en Firestore:', seccionId);
+    } catch(err) {
+      console.warn('[IAR Sync] ⚠️ Error guardando sección en Firestore (inmediato):', seccionId, err.code || err.message);
     }
   }
 
-  function renderOAVPage(seccionId) {
-    const wrapper = document.getElementById('oav-wrapper-' + seccionId);
-    if (!wrapper) return;
+  // Exponer globalmente para que script_onebyone.js pueda llamarlas
+  window._guardarSeccionFirestore = _guardarSeccionFirestore;
+  window._guardarSeccionFirestoreInmediato = _guardarSeccionFirestoreInmediato;
 
-    const preguntas = window.preguntasPorSeccion[seccionId];
-    const st = oavState[seccionId];
-    if (!st) return;
-
-    const idx   = st.currentIdx;
-    const total = st.total;
-    const preg  = preguntas[idx];
-    if (!preg) return;
-
-    const scores   = getScores(seccionId);
-    const answered = scores.filter(v => v !== null && v !== undefined).length;
-    const correct  = scores.filter(v => v === 1).length;
-    const wrong    = scores.filter(v => v === 0).length;
-    const pct      = total > 0 ? (answered / total) * 100 : 0;
-
-    const qStatus  = getQuestionStatus(seccionId, idx);
-    const isGraded = qStatus !== 'pending';
-
-    const shuffled      = getShuffledOptions(seccionId, idx, preg.opciones);
-    const restoredMixed = getRestoredAnswers(seccionId, idx, shuffled);
-    const tipoInput     = preg.multiple ? 'checkbox' : 'radio';
-    const qs  = getQuizState(seccionId);
-    const inv = qs && qs.shuffleMap && qs.shuffleMap[idx];
-
-    /* ── Header ── */
-    const barClass    = correct > 0 ? 'oav-bar-correct' : (wrong > 0 ? 'oav-bar-wrong' : 'oav-bar-answered');
-    const statusClass = qStatus === 'correct' ? 'oav-status-correct' : qStatus === 'wrong' ? 'oav-status-wrong' : 'oav-status-unanswered';
-    const statusIcon  = qStatus === 'correct' ? '✓' : qStatus === 'wrong' ? '✗' : '?';
-
-    /* ── Opciones ── */
-    let opcionesHTML = '';
-    shuffled.forEach((opt, mi) => {
-      const isSelected = restoredMixed.includes(opt.mixedIndex);
-      let optClass = '';
-      let optIcon  = '';
-      if (isGraded && inv) {
-        const isCorrectOpt  = preg.correcta.includes(opt.originalIndex);
-        const isSelectedOpt = restoredMixed.includes(opt.mixedIndex);
-        if (isCorrectOpt)                        { optClass = 'oav-option-correct'; optIcon = '✓'; }
-        else if (isSelectedOpt && !isCorrectOpt) { optClass = 'oav-option-wrong';   optIcon = '✗'; }
-      } else if (isSelected) {
-        optClass = 'oav-option-selected';
-      }
-      const disabledClass = isGraded ? ' oav-option-disabled' : '';
-
-      opcionesHTML += `
-        <label class="oav-option ${optClass}${disabledClass}"
-               data-mixed="${opt.mixedIndex}" data-original="${opt.originalIndex}"
-               for="oav-opt-${seccionId}-${idx}-${mi}">
-          <input
-            type="${tipoInput}"
-            id="oav-opt-${seccionId}-${idx}-${mi}"
-            name="pregunta${seccionId}${idx}"
-            value="${opt.mixedIndex}"
-            data-original-index="${opt.originalIndex}"
-            ${isSelected ? 'checked' : ''}
-            ${isGraded ? 'disabled' : ''}
-          >
-          <span class="oav-option-letter">${LETTERS[mi]}</span>
-          <span class="oav-option-text">${escapeHTML(opt.text)}</span>
-          <span class="oav-option-icon">${optIcon}</span>
-        </label>`;
+  // ---- Borrar el progreso de UNA sección en Firestore (al reiniciar) ----
+  // CRÍTICO: sin esto, al volver al cuestionario Firestore restaura el progreso viejo.
+  async function _borrarSeccionFirestore(seccionId) {
+    if (!_firestoreUID || !_firestoreDB) return;
+    // Cancelar TODOS los guardados pendientes (no solo el de esta sección)
+    // para evitar que un debounce en vuelo suba datos viejos después del delete
+    Object.keys(_pendingFSSave).forEach(function(sid) {
+      clearTimeout(_pendingFSSave[sid]);
+      delete _pendingFSSave[sid];
     });
-
-    /* ── Badge resultado ── */
-    let resultBadgeHTML = '';
-    if (isGraded) {
-      resultBadgeHTML = qStatus === 'correct'
-        ? '<span class="oav-result-badge oav-result-correct">✓ Correcto (+1)</span>'
-        : '<span class="oav-result-badge oav-result-wrong">✗ Incorrecto (0)</span>';
+    try {
+      const { doc, deleteDoc } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      const docRef = doc(_firestoreDB, 'progreso', _firestoreUID, 'secciones', seccionId);
+      await deleteDoc(docRef);
+      console.log('[IAR Sync] 🗑️ Sección borrada de Firestore (reinicio):', seccionId);
+    } catch(err) {
+      console.warn('[IAR Sync] ⚠️ Error borrando sección de Firestore:', seccionId, err.code || err.message);
     }
+  }
+  window._borrarSeccionFirestore = _borrarSeccionFirestore;
 
-    /* ── Explicación ── */
-    const expShown = qs && qs.explanationShown && qs.explanationShown[idx];
-    let explicacionHTML = '';
-    if (preg.explicacion && preg.explicacion.trim() !== '') {
-      const expContent = expShown ? `
-        <div class="oav-explanation" id="oav-exp-${seccionId}-${idx}">
-          <div class="oav-explanation-title">💡 Explicación</div>
-          <p class="oav-explanation-text">${escapeHTML(preg.explicacion)}</p>
-          ${preg.imagen_explicacion ? `<img src="${getImagenUrl(preg.imagen_explicacion)}" alt="Imagen de la explicación" onclick="window.open(this.src,'_blank')" title="Clic para ampliar">` : ''}
-        </div>` : '';
-      const expBtnText     = expShown ? 'Ocultar explicación' : 'Ver explicación';
-      const expBtnDisabled = !isGraded ? 'disabled' : '';
-      explicacionHTML = `
-        <button class="oav-btn oav-btn-ghost" id="oav-btn-exp-${seccionId}-${idx}"
-                ${expBtnDisabled}
-                onclick="window._oavToggleExplicacion('${seccionId}',${idx})">
-          💬 ${expBtnText}
-        </button>
-        ${expContent}`;
+  // ---- Guardar historial de intentos en Firestore ----
+  async function _guardarHistorialFirestore() {
+    if (!_firestoreUID || !_firestoreDB) return;
+    try {
+      const { doc, setDoc, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      const docRef = doc(_firestoreDB, 'progreso', _firestoreUID, 'datos', 'historial');
+      await setDoc(docRef, { entries: attemptLog, _ts: serverTimestamp() });
+      console.log('[IAR Sync] ✅ Historial guardado en Firestore');
+    } catch(err) {
+      console.warn('[IAR Sync] ⚠️ Error guardando historial en Firestore:', err.code || err.message);
     }
+  }
 
-    /* ── Mini-mapa: barra de segmentos horizontal ── */
-    let minimapHTML = '<div class="oav-minimap" title="Navegá entre preguntas">';
-    for (let i = 0; i < total; i++) {
-      const st2 = getQuestionStatus(seccionId, i);
-      const isPending = st2 === 'pending';
-      const isCurrentPending = isPending && i === idx;
-      const dotClass = i === idx         ? 'oav-dot-current' :
-                       st2 === 'correct' ? 'oav-dot-correct' :
-                       st2 === 'wrong'   ? 'oav-dot-wrong'   :
-                       isPending         ? 'oav-dot-pending-pulse' : '';
-      minimapHTML += `<div class="oav-dot ${dotClass}" data-num="${i+1}" onclick="window._oavGoTo('${seccionId}',${i})"></div>`;
+  // ---- Guardar completados en Firestore ----
+  async function _guardarCompletadosFirestore(completados) {
+    if (!_firestoreUID || !_firestoreDB) return;
+    try {
+      const { doc, setDoc, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+      const docRef = doc(_firestoreDB, 'progreso', _firestoreUID, 'datos', 'completados');
+      await setDoc(docRef, { completados, _ts: serverTimestamp() });
+      console.log('[IAR Sync] ✅ Completados guardados en Firestore');
+    } catch(err) {
+      console.warn('[IAR Sync] ⚠️ Error guardando completados en Firestore:', err.code || err.message);
     }
-    minimapHTML += '</div>';
+  }
 
-    // Chip de pendientes: clickeable si hay preguntas sin responder
-    const pending = total - answered;
-    const firstPendingIdx = pending > 0
-      ? Array.from({length: total}, (_, i) => i).find(i => {
-          const v = scores[i]; return (v === null || v === undefined) && i !== idx;
-        })
-      : null;
-    // Si no hay otra pendiente distinta a la actual, buscar incluyendo la actual
-    const jumpToPending = firstPendingIdx !== null && firstPendingIdx !== undefined
-      ? firstPendingIdx
-      : (pending > 0 ? Array.from({length: total}, (_, i) => i).find(i => {
-          const v = scores[i]; return v === null || v === undefined;
-        }) : null);
+  // ---- Sincronizar TODO desde Firestore al iniciar sesión ----
+  // Se llama desde firebase-auth.js después de autenticar
+  window._sincronizarProgresoDesdeFirestore = async function(uid) {
+    if (!uid) return;
+    // Esperar a que _firestoreDB esté disponible (puede tardar un tick)
+    let intentos = 0;
+    while (!_firestoreDB && intentos < 30) {
+      await new Promise(r => setTimeout(r, 200));
+      intentos++;
+    }
+    if (!_firestoreDB) {
+      console.warn('[IAR Sync] No se pudo obtener la instancia de Firestore para sincronización');
+      return;
+    }
+    _firestoreUID = uid;
+    _sincronizandoDesdeFS = true; // suprimir re-escritura en Firestore durante la carga
 
-    const pendingChipHTML = pending > 0
-      ? `<span class="oav-chip oav-chip-pending-active"
-               title="Ir a la primera pregunta sin responder"
-               onclick="window._oavGoTo('${seccionId}', ${jumpToPending})">
-           ⚡ ${pending} sin responder
-         </span>`
-      : `<span class="oav-chip oav-chip-pending">✓ todas respondidas</span>`;
+    // CRÍTICO: limpiar historial local ANTES de cargar el de Firestore.
+    // Sin esto, un usuario nuevo ve el historial del usuario anterior
+    // que quedó en localStorage del mismo navegador.
+    attemptLog = [];
+    localStorage.removeItem(ATTEMPT_LOG_KEY);
+    console.log('[IAR Sync] 🧹 Historial local limpiado antes de cargar desde Firestore (uid:', uid, ')');
 
-    /* ── Render final ── */
-    wrapper.innerHTML = `
-      <div class="oav-header">
-        <div class="oav-counter">
-          <span class="oav-counter-num">${idx + 1}</span>
-          <span class="oav-counter-total">de&nbsp;${total}</span>
-        </div>
-        <div class="oav-header-divider"></div>
-        <div class="oav-progress-col">
-          <div class="oav-stats">
-            <span class="oav-chip oav-chip-correct">✓ ${correct} correctas</span>
-            <span class="oav-chip oav-chip-wrong">✗ ${wrong} incorrectas</span>
-            ${pendingChipHTML}
-          </div>
-          <div class="oav-bar-track">
-            <div class="oav-bar-fill ${barClass}" style="width:${pct}%"></div>
-          </div>
-        </div>
-        <div class="oav-status-icon ${statusClass}">${statusIcon}</div>
-      </div>
+    try {
+      const { doc, getDoc, collection, getDocs } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
 
-      <div class="oav-card">
-        <div class="oav-card-body">
-          <span class="oav-question-label">Pregunta ${idx + 1}</span>
-          <div class="oav-question-text">${escapeHTML(preg.pregunta)}</div>
-          ${preg.imagen ? `<img class="oav-question-img" src="${getImagenUrl(preg.imagen)}" alt="Imagen" onclick="window.open(this.src,'_blank')" title="Clic para ampliar">` : ''}
-          <div class="oav-options" id="oav-options-${seccionId}-${idx}">
-            ${opcionesHTML}
-          </div>
-          ${resultBadgeHTML}
-        </div>
-        <div class="oav-card-footer">
-          <div class="oav-btn-row">
-            <button class="oav-btn oav-btn-primary"
-                    ${isGraded ? 'disabled' : ''}
-                    onclick="window._oavResponder('${seccionId}',${idx})">
-              ✓ Responder
-            </button>
-            ${explicacionHTML}
-          </div>
-        </div>
-      </div>
+      // ─────────────────────────────────────────────────────────────────────────
+      // REGLA FUNDAMENTAL: Firestore es la fuente de verdad para TODO el progreso.
+      // Al iniciar sesión, el estado de Firestore REEMPLAZA al localStorage
+      // para cada sección que exista en Firestore.
+      // El localStorage es solo caché de sesión — nunca puede ganarle a Firestore.
+      // ─────────────────────────────────────────────────────────────────────────
 
-      <div class="oav-nav">
-        <button class="oav-nav-btn"
-                onclick="window._oavGoTo('${seccionId}',(${idx} - 1 + ${total}) % ${total})">
-          ← Anterior
-        </button>
-        ${minimapHTML}
-        <button class="oav-nav-btn oav-nav-btn-next"
-                onclick="window._oavGoTo('${seccionId}',(${idx} + 1) % ${total})">
-          Siguiente →
-        </button>
-      </div>
-      ${st.isReviewing ? `
-      <div style="display:flex;justify-content:center;margin-top:14px;">
-        <button class="oav-btn oav-btn-ghost" onclick="window._oavSalirRevision('${seccionId}')">
-          Salir de la revisión 🔍
-        </button>
-      </div>` : ''}
-    `;
+      // --- 1. Cargar estado de TODAS las secciones desde Firestore ---
+      // Firestore reemplaza incondicionalmente el estado local de cada sección.
+      // Si una sección no existe en Firestore, se conserva el estado local.
+      try {
+        const seccionesCol = collection(_firestoreDB, 'progreso', uid, 'secciones');
+        const secSnap = await getDocs(seccionesCol);
+        let seccionesActualizadas = 0;
 
-    /* ── Listeners de selección ── */
-    const optContainer = document.getElementById('oav-options-' + seccionId + '-' + idx);
-    if (optContainer && !isGraded) {
-      optContainer.querySelectorAll('input').forEach(inp => {
-        inp.addEventListener('change', () => {
-          optContainer.querySelectorAll('.oav-option').forEach(lbl => lbl.classList.remove('oav-option-selected'));
-          if (tipoInput === 'radio') {
-            inp.closest('.oav-option').classList.add('oav-option-selected');
-          } else {
-            optContainer.querySelectorAll('input:checked').forEach(ci => {
-              ci.closest('.oav-option').classList.add('oav-option-selected');
-            });
+        secSnap.forEach(docSnap => {
+          const seccionId = docSnap.id;
+          const data = docSnap.data();
+          delete data._ts; // quitar campo técnico interno
+
+          // ── Simulacro IAR: NUNCA restaurar progreso incompleto desde Firestore ──
+          // El simulacro es efímero: si el usuario cerró sesión/recargó con progreso a medias,
+          // ese progreso se descarta. Solo se restaura si estaba completamente terminado (totalShown).
+          if (seccionId === 'simulacro_iar' && !data.totalShown) {
+            console.log('[IAR Sync] ⏭️ simulacro_iar incompleto en Firestore — ignorado (se generará nuevo set)');
+            // También borrar de Firestore para no acumular datos obsoletos
+            _borrarSeccionFirestore('simulacro_iar');
+            return; // skip this section
           }
-          _persistAnswers(seccionId, idx);
+
+          const fsGradedCount = data.graded
+            ? Object.keys(data.graded).filter(k => data.graded[k]).length
+            : 0;
+          const fsHayAnswers = data.answers && Object.keys(data.answers).some(k => {
+            const a = data.answers[k]; return Array.isArray(a) && a.length > 0;
+          });
+
+          // Contar progreso local para logging
+          const localData = state[seccionId];
+          const localGradedCount = localData && localData.graded
+            ? Object.keys(localData.graded).filter(k => localData.graded[k]).length
+            : 0;
+
+          if (fsGradedCount > 0 || fsHayAnswers || data.totalShown) {
+            // Firestore tiene progreso real → reemplazar local incondicionalmente
+            state[seccionId] = data;
+            seccionesActualizadas++;
+            if (fsGradedCount !== localGradedCount) {
+              console.log('[IAR Sync] ✅ Sección actualizada desde Firestore:', seccionId,
+                '| FS:', fsGradedCount, 'resp | Local previo:', localGradedCount, 'resp');
+            }
+          } else if (localGradedCount > 0) {
+            // Firestore está vacío pero local tiene datos → subir local a Firestore
+            console.log('[IAR Sync] ⬆️ Subiendo progreso local a Firestore (FS vacío):', seccionId);
+            _guardarSeccionFirestore(seccionId);
+          }
         });
-      });
+
+        // Para secciones que están en local pero NO en Firestore:
+        // subir esos datos a Firestore (por si se respondieron sin conexión o antes de la sincronización)
+        Object.keys(state).forEach(function(seccionId) {
+          // Nunca subir a Firestore el simulacro_iar si está incompleto
+          if (seccionId === 'simulacro_iar') {
+            const s = state[seccionId];
+            if (!s || !s.totalShown) return; // skip
+          }
+          // Verificar si esta sección ya fue procesada desde Firestore
+          let yaEnFS = false;
+          secSnap.forEach(docSnap => { if (docSnap.id === seccionId) yaEnFS = true; });
+          if (!yaEnFS) {
+            const s = state[seccionId];
+            const hayGraded = s && s.graded && Object.keys(s.graded).some(k => s.graded[k]);
+            const hayAnswers = s && s.answers && Object.keys(s.answers).some(k => {
+              const a = s.answers[k]; return Array.isArray(a) && a.length > 0;
+            });
+            if (hayGraded || hayAnswers || (s && s.totalShown)) {
+              console.log('[IAR Sync] ⬆️ Sección local no encontrada en Firestore, subiendo:', seccionId);
+              _guardarSeccionFirestore(seccionId);
+            }
+          }
+        });
+
+        // Actualizar localStorage con el estado fusionado
+        saveJSON(STORAGE_KEY, state);
+        console.log('[IAR Sync] ✅ Sincronización completada. Secciones actualizadas desde Firestore:', seccionesActualizadas);
+      } catch(e) {
+        console.warn('[IAR Sync] No se pudo cargar secciones desde Firestore:', e.code || e.message);
+      }
+
+      // --- 2. Cargar historial (Firestore siempre es la fuente de verdad) ---
+      try {
+        const histRef = doc(_firestoreDB, 'progreso', uid, 'datos', 'historial');
+        const histSnap = await getDoc(histRef);
+        if (histSnap.exists() && histSnap.data().entries) {
+          const fsEntries = histSnap.data().entries;
+          // Firestore gana si tiene más entradas o igual cantidad
+          // Solo se conserva local si Firestore está vacío y local tiene datos
+          if (fsEntries.length >= attemptLog.length) {
+            attemptLog = fsEntries;
+            saveJSON(ATTEMPT_LOG_KEY, attemptLog);
+            console.log('[IAR Sync] ✅ Historial cargado desde Firestore:', fsEntries.length, 'entradas');
+          } else if (attemptLog.length > 0) {
+            // Local tiene más entradas → subir a Firestore
+            console.log('[IAR Sync] ⬆️ Historial local tiene más entradas, subiendo a Firestore');
+            _guardarHistorialFirestore();
+          }
+        } else if (attemptLog.length > 0) {
+          // Firestore no tiene historial pero local sí → subir
+          console.log('[IAR Sync] ⬆️ Subiendo historial local a Firestore (FS sin historial)');
+          _guardarHistorialFirestore();
+        }
+      } catch(e) {
+        console.warn('[IAR Sync] No se pudo cargar historial desde Firestore:', e.code || e.message);
+      }
+
+      // --- 3. Cargar completados (Firestore es la fuente de verdad, fusionar con local) ---
+      try {
+        const compRef = doc(_firestoreDB, 'progreso', uid, 'datos', 'completados');
+        const compSnap = await getDoc(compRef);
+        const USER_KEY = 'iar_user_id_v1';
+        const COMPLETED_KEY_PREFIX = 'iar_completed_v1_';
+        const localUid = localStorage.getItem(USER_KEY);
+
+        if (compSnap.exists() && compSnap.data().completados) {
+          const fsCompleted = compSnap.data().completados;
+          if (localUid) {
+            const completedKey = COMPLETED_KEY_PREFIX + localUid;
+            let localCompleted = {};
+            try { localCompleted = JSON.parse(localStorage.getItem(completedKey) || '{}'); } catch(e2) {}
+            // Fusión: Firestore tiene prioridad, se agregan los locales que no estén en FS
+            const merged = { ...localCompleted, ...fsCompleted };
+            localStorage.setItem(completedKey, JSON.stringify(merged));
+            // Si local tenía algo que FS no tiene, subir la fusión a Firestore
+            const localTieneExtra = Object.keys(localCompleted).some(k => !fsCompleted[k]);
+            if (localTieneExtra) {
+              _guardarCompletadosFirestore(merged);
+            }
+          }
+          console.log('[IAR Sync] ✅ Completados cargados desde Firestore');
+        } else if (localUid) {
+          // Firestore no tiene completados → subir los locales si existen
+          const completedKey = COMPLETED_KEY_PREFIX + localUid;
+          let localCompleted = {};
+          try { localCompleted = JSON.parse(localStorage.getItem(completedKey) || '{}'); } catch(e2) {}
+          if (Object.keys(localCompleted).length > 0) {
+            console.log('[IAR Sync] ⬆️ Subiendo completados locales a Firestore');
+            _guardarCompletadosFirestore(localCompleted);
+          }
+        }
+        // Actualizar UI de checkmarks
+        if (typeof renderNavBar === 'function') renderNavBar();
+        _actualizarCheckmarksMenu();
+      } catch(e) {
+        console.warn('[IAR Sync] No se pudo cargar completados desde Firestore:', e.code || e.message);
+      }
+
+    } catch(err) {
+      console.warn('[IAR Sync] Error general en sincronización desde Firestore:', err.code || err.message);
+    } finally {
+      _sincronizandoDesdeFS = false; // restaurar flag sea cual sea el resultado
     }
-
-    /* ── Resaltado de texto buscado (si viene del buscador) ── */
-    if (window._buscadorQueryPendiente) {
-      var query = window._buscadorQueryPendiente;
-      window._buscadorQueryPendiente = null;
-      requestAnimationFrame(function() {
-        _resaltarTextoBuscadoOAV(wrapper, query);
-        wrapper.classList.add('buscador-highlight');
-        setTimeout(function() { wrapper.classList.remove('buscador-highlight'); }, 2500);
-      });
-    }
-
-    /* ── Comentarios por pregunta (desactivados en simulacro) ── */
-    if (typeof window._oavRenderComentarios === 'function' && seccionId !== 'simulacro_iar') {
-      window._oavRenderComentarios(seccionId, idx);
-    }
-  }
-
-  /* ─────────────────────────────────────────────────────────
-     PERSISTENCIA LOCAL
-  ───────────────────────────────────────────────────────── */
-  function _persistAnswers(seccionId, qIndex) {
-    // Las marcas de preguntas NO respondidas se guardan en MEMORIA DE SESIÓN
-    // por TEXTO (no por posición). Así sobreviven a la re-aleatorización de opciones
-    // mientras el usuario navega dentro del mismo cuestionario.
-    // Se borran al salir, reiniciar o crear nuevo simulacro (Casos 2,3,4,6,8,9,12).
-    try {
-      const inputs = Array.from(document.getElementsByName('pregunta' + seccionId + qIndex));
-      const textos = inputs
-        .filter(inp => inp.checked)
-        .map(inp => {
-          const lbl = inp.closest('.oav-option');
-          return lbl ? lbl.querySelector('.oav-option-text').textContent : '';
-        })
-        .filter(t => t !== '');
-      _setSessionMark(seccionId, qIndex, textos);
-      // NO escribir en localStorage — las marcas pendientes solo viven en sesión
-    } catch (e) {}
-  }
-
-  /* ─────────────────────────────────────────────────────────
-     ACCIONES GLOBALES
-  ───────────────────────────────────────────────────────── */
-  window._oavGoTo = function (seccionId, idx) {
-    const st = oavState[seccionId];
-    if (!st) return;
-    const total = (window.preguntasPorSeccion[seccionId] || []).length;
-    if (idx < 0 || idx >= total) return;
-    st.currentIdx = idx;
-    _saveCurrentIdx(seccionId, idx);
-    renderOAVPage(seccionId);
-    const cont = document.getElementById('cuestionario-' + seccionId);
-    if (cont) cont.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  window._oavResponder = function (seccionId, qIndex) {
-    const preguntas = window.preguntasPorSeccion && window.preguntasPorSeccion[seccionId];
-    if (!preguntas) return;
-    const preg = preguntas[qIndex];
+  // ---- Actualizar checkmarks en el menú ----
+  function _actualizarCheckmarksMenu() {
+    try {
+      const USER_KEY = 'iar_user_id_v1';
+      const COMPLETED_KEY_PREFIX = 'iar_completed_v1_';
+      const uid = localStorage.getItem(USER_KEY);
+      if (!uid) return;
+      const completedKey = COMPLETED_KEY_PREFIX + uid;
+      const completed = JSON.parse(localStorage.getItem(completedKey) || '{}');
+      document.querySelectorAll('li[onclick]').forEach(function(li) {
+        const m = li.getAttribute('onclick').match(/mostrarCuestionario\('([^']+)'\)/);
+        if (m && completed[m[1]]) {
+          li.classList.add('iar-completado');
+          const inp = li.querySelector('.iar-check-input');
+          if (inp) {
+            inp.checked = true;
+            const icon = li.querySelector('.iar-check-icon');
+            if (icon) icon.title = 'Completado — clic para desmarcar';
+          }
+        }
+      });
+    } catch(e) {}
+  }
 
-    const inputs   = Array.from(document.getElementsByName('pregunta' + seccionId + qIndex));
-    const selMixed = inputs.map((inp, i) => inp.checked ? i : null).filter(v => v !== null);
+  // ---- Exponer UID de Firebase para que firebase-auth.js lo use ----
+  // (se llama desde firebase-auth.js pasando db y uid)
+  // END OF FIRESTORE SYNC MODULE
 
-    if (selMixed.length === 0) {
-      const card = document.querySelector('#oav-wrapper-' + seccionId + ' .oav-card');
-      if (card) {
-        card.style.boxShadow = '0 0 0 2px #dc2626, 0 4px 24px rgba(220,38,38,0.15)';
-        setTimeout(() => { card.style.boxShadow = ''; }, 900);
+  // ======== MANEJO DE NAVEGACIÓN DEL NAVEGADOR ========
+  let currentSection = null;
+
+  // ======== Utilidades ========
+  function loadJSON(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      return JSON.parse(raw);
+    } catch {
+      return fallback;
+    }
+  }
+  let _sincronizandoDesdeFS = false; // flag para evitar re-subir a FS durante la carga inicial
+
+  function saveJSON(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+    // ── Firestore sync ──
+    // No disparar guardado en Firestore si estamos en medio de una sincronización
+    // desde Firestore (evita loop y escrituras innecesarias)
+    if (key === STORAGE_KEY && !_sincronizandoDesdeFS) {
+      // Guardar cada sección que tenga progreso real
+      const stateObj = value;
+      Object.keys(stateObj).forEach(function(seccionId) {
+        // Simulacro IAR incompleto: NUNCA subir a Firestore (es efímero)
+        if (seccionId === 'simulacro_iar') {
+          const s = stateObj[seccionId];
+          if (!s || !s.totalShown) return; // skip — solo subir si está completado
+        }
+        const s = stateObj[seccionId];
+        const hayGraded = s && s.graded && Object.keys(s.graded).some(function(k){ return s.graded[k]; });
+        const hayAnswers = s && s.answers && Object.keys(s.answers).some(function(k){
+          var a = s.answers[k]; return Array.isArray(a) && a.length > 0;
+        });
+        if (hayGraded || hayAnswers || (s && s.totalShown)) {
+          _guardarSeccionFirestore(seccionId);
+        }
+      });
+    }
+  }
+  function cap(str) {
+    return str ? str.charAt(0).toUpperCase() + str.slice(1) : "";
+  }
+  function todayISO() {
+    return new Date().toISOString();
+  }
+  function toLocalDateStr(iso) {
+    const d = new Date(iso);
+    return d.toLocaleDateString();
+  }
+
+  // ======== Scroll inteligente: guardar el cuestionario de origen para volver a él ========
+  const LAST_SECTION_KEY = "quiz_last_section_v1";
+
+  function saveLastSection(seccionId) {
+    localStorage.setItem(LAST_SECTION_KEY, seccionId);
+    // También guardar la posición del scroll del menú/submenú actual (como fallback)
+    const scrollPosition = window.pageYOffset || document.documentElement.scrollTop;
+    localStorage.setItem(SCROLL_POSITION_KEY, scrollPosition.toString());
+  }
+
+  function scrollToSectionItem(seccionId) {
+    if (!seccionId) {
+      // Fallback: restaurar posición guardada
+      const savedPosition = localStorage.getItem(SCROLL_POSITION_KEY);
+      if (savedPosition) {
+        requestAnimationFrame(() => {
+          window.scrollTo({ top: parseInt(savedPosition, 10), behavior: 'smooth' });
+        });
       }
       return;
     }
 
-    try {
-      const raw = localStorage.getItem('quiz_state_v3');
-      const all = JSON.parse(raw || '{}');
-      if (!all[seccionId]) {
-        all[seccionId] = { shuffleMap: {}, answers: {}, graded: {}, explanationShown: {}, shuffleFrozen: false };
-      }
-      if (!all[seccionId].shuffleMap)       all[seccionId].shuffleMap       = {};
-      if (!all[seccionId].answers)          all[seccionId].answers          = {};
-      if (!all[seccionId].graded)           all[seccionId].graded           = {};
-      if (!all[seccionId].explanationShown) all[seccionId].explanationShown = {};
-
-      // Al responder, SIEMPRE construir el inv desde el DOM actual y congelarlo.
-      // El orden actual en el DOM es el orden aleatorio de ESTE momento → queda fijo.
-      const invBuild = {};
-      inputs.forEach((inp, mi) => {
-        invBuild[mi] = parseInt(inp.getAttribute('data-original-index'), 10);
-      });
-      all[seccionId].shuffleMap[qIndex] = invBuild;
-      all[seccionId].shuffleFrozen = true;
-
-      const inv = invBuild;
-
-      const selOriginal     = selMixed.map(i => inv[i]).sort((a, b) => a - b);
-      const correctOriginal = preg.correcta.slice().sort((a, b) => a - b);
-      const isCorrect       = JSON.stringify(selOriginal) === JSON.stringify(correctOriginal);
-
-      all[seccionId].answers[qIndex] = selMixed;
-      all[seccionId].graded[qIndex]  = true;
-      // Si el examen estaba marcado como completado (totalShown=true) y el usuario
-      // está respondiendo de nuevo, resetear totalShown para que el nuevo intento
-      // sea reconocido como 'en curso'
-      if (all[seccionId].totalShown) {
-        all[seccionId].totalShown = false;
-      }
-      localStorage.setItem('quiz_state_v3', JSON.stringify(all));
-
-      // Limpiar la marca de sesión de esta pregunta (ya está respondida y congelada)
-      if (_sessionMarks[seccionId]) {
-        delete _sessionMarks[seccionId][qIndex];
-      }
-
-      // Sincronizar con Firestore inmediatamente (no debounced)
-      if (typeof window._guardarSeccionFirestoreInmediato === 'function') {
-        window._guardarSeccionFirestoreInmediato(seccionId);
-      } else if (typeof window._guardarSeccionFirestore === 'function') {
-        window._guardarSeccionFirestore(seccionId);
-      }
-
-      // Actualizar puntajes en memoria
-      if (!window.puntajesPorSeccion)                window.puntajesPorSeccion          = {};
-      if (!window.puntajesPorSeccion[seccionId])     window.puntajesPorSeccion[seccionId] = Array(preguntas.length).fill(null);
-      window.puntajesPorSeccion[seccionId][qIndex]   = isCorrect ? 1 : 0;
-
-      // Guardar posición actual
-      if (oavState[seccionId]) {
-        _saveCurrentIdx(seccionId, oavState[seccionId].currentIdx);
-      }
-
-      // Re-render la tarjeta actual
-      renderOAVPage(seccionId);
-
-      // Verificar si todas están respondidas
-      const allAnswered = window.puntajesPorSeccion[seccionId].every(v => v !== null && v !== undefined);
-      if (allAnswered && !all[seccionId].totalShown) {
-        _clearCurrentIdx(seccionId);
-        // Detener el timer del simulacro al responder la última pregunta
-        if (seccionId === 'simulacro_iar' && window._simulacroTimer) {
-          window._simulacroTimer.limpiar();
-        }
-        setTimeout(() => _mostrarResultadoFinalOAV(seccionId), 600);
-      }
-
-    } catch (e) {
-      console.error('[OAV] Error al responder:', e);
-    }
-  };
-
-  window._oavToggleExplicacion = function (seccionId, qIndex) {
-    try {
-      const raw = localStorage.getItem('quiz_state_v3');
-      const all = JSON.parse(raw || '{}');
-      if (!all[seccionId]) return;
-      if (!all[seccionId].explanationShown) all[seccionId].explanationShown = {};
-      all[seccionId].explanationShown[qIndex] = !all[seccionId].explanationShown[qIndex];
-      localStorage.setItem('quiz_state_v3', JSON.stringify(all));
-      renderOAVPage(seccionId);
-    } catch (e) {}
-  };
-
-  window._oavRevisar = function (seccionId) {
-    if (!oavState[seccionId]) oavState[seccionId] = { total: 0 };
-    oavState[seccionId].currentIdx = 0;
-    oavState[seccionId].isReviewing = true;
-    renderOAVPage(seccionId);
-  };
-
-  window._oavSalirRevision = function (seccionId) {
-    if (oavState[seccionId]) oavState[seccionId].isReviewing = false;
-    _mostrarResultadoFinalOAV(seccionId);
-  };
-
-  window._oavReiniciar = function (seccionId) {
-    // IMPORTANTE: NO limpiar marcas aquí — se limpian dentro del callback de confirmación
-    // para que si el usuario cancela el diálogo, las marcas se conserven.
-    if (typeof window.reiniciarExamen === 'function') {
-      // reiniciarExamen mostrará el diálogo de confirmación.
-      // Pasamos un callback postConfirm para limpiar el estado OAV solo si se confirma.
-      window._oavPendingReiniciarCallback = function() {
-        _clearCurrentIdx(seccionId);
-        _clearSessionMarks(seccionId);
-        if (oavState[seccionId]) {
-          oavState[seccionId].currentIdx = 0;
-          oavState[seccionId].isReviewing = false;
-        }
-        // Borrar en Firestore
-        if (typeof window._borrarSeccionFirestore === 'function') {
-          window._borrarSeccionFirestore(seccionId);
-        }
-        // Reiniciar el cronómetro si es el simulacro IAR
-        if (seccionId === 'simulacro_iar' && window._simulacroTimer) {
-          window._simulacroTimer.limpiar();
-          setTimeout(function() {
-            if (window._simulacroTimer) window._simulacroTimer.iniciar();
-          }, 1000);
-        }
-      };
-      window.reiniciarExamen(seccionId);
-    } else {
-      // Fallback si reiniciarExamen no existe
-      _clearCurrentIdx(seccionId);
-      _clearSessionMarks(seccionId);
-      try {
-        const raw = localStorage.getItem('quiz_state_v3');
-        const all = JSON.parse(raw || '{}');
-        delete all[seccionId];
-        localStorage.setItem('quiz_state_v3', JSON.stringify(all));
-      } catch(e) {}
-      if (typeof window._borrarSeccionFirestore === 'function') {
-        window._borrarSeccionFirestore(seccionId);
-      }
-      if (window.puntajesPorSeccion) {
-        window.puntajesPorSeccion[seccionId] = Array((window.preguntasPorSeccion[seccionId] || []).length).fill(null);
-      }
-      if (oavState[seccionId]) oavState[seccionId].currentIdx = 0;
-      renderOAV(seccionId);
-    }
-  };
-
-  /* ─────────────────────────────────────────────────────────
-     PANTALLA DE RESULTADO FINAL
-  ───────────────────────────────────────────────────────── */
-  function _mostrarResultadoFinalOAV(seccionId) {
-    const preguntas  = window.preguntasPorSeccion[seccionId] || [];
-    const total      = preguntas.length;
-    const scores     = getScores(seccionId);
-    const totalScore = scores.reduce((a, b) => a + (b || 0), 0);
-    const pct        = total > 0 ? (totalScore / total) * 100 : 0;
-    const barColor   = pct >= 70 ? '#059669' : pct >= 50 ? '#d97706' : '#dc2626';
-    const icon       = pct === 100 ? '🏆' : pct >= 70 ? '🌟' : pct >= 50 ? '💪' : '📚';
-    const frase      = _localFrase(pct);
-
-    // Marcar totalShown
-    try {
-      const raw = localStorage.getItem('quiz_state_v3');
-      const all = JSON.parse(raw || '{}');
-      if (all[seccionId]) { all[seccionId].totalShown = true; localStorage.setItem('quiz_state_v3', JSON.stringify(all)); }
-    } catch(e) {}
-
-    // Disparar lógica original (checkmark, attemptLog)
-    const resultNode = document.getElementById('resultado-total-' + seccionId);
-    if (resultNode && !resultNode.dataset.oavFired) {
-      resultNode.dataset.oavFired = '1';
-      if (typeof window.mostrarResultadoFinal === 'function') {
-        window.mostrarResultadoFinal(seccionId);
-      }
-    }
-
-    const wrapper = document.getElementById('oav-wrapper-' + seccionId);
-    if (!wrapper) return;
-
-    // Calcular siguiente sección en el carrusel IAR
-    const IAR_CARRUSEL_OAV = [
-      'iarsep2020','iaroct2020','iarnov2020','iardic2020',
-      'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
-      'iarmar2022','iarabr2022','iarjun2022','iarago2022','iaroct2022','iardic2022',
-      'iarmar2023','iarabr2023','iarmay2023','iarjun2023','iarago2023','iaroct2023','iardic2023',
-      'iarmar2024','iarabr2024','iarmay2024','iarjun2024','iarago2024','iarsep2024','iaroct2024','iarnov2024','iardic2024',
-      'iarfeb2025','iarmar2025','iarabr2025','iarjun2025','iarsep2025','iaroct2025','iarnov2025','iardic2025',
-      'iarfeb2026'
-    ];
-    const idxCarrusel = IAR_CARRUSEL_OAV.indexOf(seccionId);
-    const siguienteSeccion = idxCarrusel >= 0 && idxCarrusel < IAR_CARRUSEL_OAV.length - 1
-      ? IAR_CARRUSEL_OAV[idxCarrusel + 1] : null;
-    const btnSiguiente = siguienteSeccion ? `
-      <button class="oav-btn oav-btn-primary" onclick="window._oavAvanzarSiguiente('${seccionId}','${siguienteSeccion}')">
-        📖 Avanzar al siguiente cuestionario
-      </button>` : '';
-
-    wrapper.innerHTML = `
-      <div class="oav-result-screen">
-        <div class="oav-result-icon">${icon}</div>
-        <div class="oav-result-score">${totalScore}<span style="font-size:1.2rem;color:#94a3b8;font-weight:500"> / ${total}</span></div>
-        <div class="oav-result-label">${Math.round(pct)}% de respuestas correctas</div>
-        <div class="oav-result-bar-wrap">
-          <div class="oav-result-bar-fill" style="width:0%;background:${barColor}" id="oav-result-bar-${seccionId}"></div>
-        </div>
-        <div class="oav-result-phrase">${frase}</div>
-        <div class="oav-result-actions" style="flex-direction:column;align-items:center;gap:10px;">
-          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;">
-            <button class="oav-btn oav-btn-ghost" onclick="window._oavReiniciar('${seccionId}')">🔄 Reiniciar este cuestionario</button>
-            <button class="oav-btn oav-btn-ghost" onclick="window._oavRevisar('${seccionId}')">🔍 Revisar respuestas</button>
-          </div>
-          ${btnSiguiente}
-          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;">
-            <button class="oav-btn oav-btn-ghost" onclick="window._oavVolverAlMenu('${seccionId}')">🏠 Salir al menú principal</button>
-            ${seccionId === 'simulacro_iar'
-              ? `<button class="oav-btn oav-btn-ghost" onclick="window.crearNuevoSimulacroIAR()">🎲 Crear nuevo cuestionario IAR</button>`
-              : `<button class="oav-btn oav-btn-ghost" onclick="window._oavVolverAlSubmenu('${seccionId}')">📋 Volver al submenú IAR</button>`
-            }
-          </div>
-        </div>
-      </div>`;
-
+    // Buscar el <li> que lanza este cuestionario en el menú o submenú visible
     requestAnimationFrame(() => {
+      // Esperar un frame extra para que el menú/submenú esté visible
       requestAnimationFrame(() => {
-        const bar = document.getElementById('oav-result-bar-' + seccionId);
-        if (bar) bar.style.width = pct + '%';
+        const allLis = document.querySelectorAll('li[onclick]');
+        let targetLi = null;
+        for (const li of allLis) {
+          const onclick = li.getAttribute('onclick') || '';
+          if (onclick.includes(`'${seccionId}'`) || onclick.includes(`"${seccionId}"`)) {
+            targetLi = li;
+            break;
+          }
+        }
+        if (targetLi) {
+          targetLi.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Resaltar brevemente el ítem
+          const originalBg = targetLi.style.backgroundColor;
+          const originalTransition = targetLi.style.transition;
+          targetLi.style.transition = 'background-color 0.15s ease';
+          targetLi.style.backgroundColor = 'rgba(255, 220, 80, 0.55)';
+          setTimeout(() => {
+            targetLi.style.backgroundColor = originalBg || '';
+            setTimeout(() => {
+              targetLi.style.transition = originalTransition || '';
+            }, 600);
+          }, 900);
+        } else {
+          // Si no se encuentra el li (ej: submenú dentro de submenú), fallback a posición guardada
+          const savedPosition = localStorage.getItem(SCROLL_POSITION_KEY);
+          if (savedPosition) {
+            window.scrollTo({ top: parseInt(savedPosition, 10), behavior: 'smooth' });
+          }
+        }
+        localStorage.removeItem(LAST_SECTION_KEY);
       });
     });
-    wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
-  function _localFrase(pct) {
-    // Selecciona aleatoriamente uno de los mensajes del rango correspondiente
-    function pick(arr) {
-      return arr[Math.floor(Math.random() * arr.length)];
-    }
-
-    if (pct === 100) return pick([
-      '🏆 ¡Perfecto! Dominás cada concepto con maestría. Sos exactamente el médico que el sistema necesita.',
-      '✨ Impecable. Tu conocimiento brilla con luz propia. Seguí así 💪',
-      '🎯 Precisión absoluta. Cada respuesta refleja el fruto de tu dedicación.',
-      '🏅 Excelencia en su máxima expresión. Este resultado es el reflejo de tu esfuerzo.'
-    ]);
-    if (pct >= 91) return pick([
-      '🌟 ¡Excelente resultado! Estás muy cerca de la cima. Un pequeño ajuste más y alcanzarás la perfección.',
-      '⭐ Casi perfecto. ¡Seguí afinando!',
-      '🌠 Resultado sobresaliente. Vas por el camino exacto hacia la maestría.',
-      '💎 Un desempeño brillante. Revisá los mínimos errores y la próxima será perfecta.'
-    ]);
-    if (pct >= 81) return pick([
-      '💪 ¡Muy bien! Tu preparación es sólida. Revisá los errores con calma y vas a llegar más alto todavía.',
-      '📚 Muy sólido. Tu base de conocimientos es envidiable.',
-      '🌳 Tus cimientos son fuertes. Cada árbol grande comenzó siendo una semilla bien nutrida.',
-      '🎓 Notable. La consistencia en tu estudio está dando frutos. ¡Celebrá este logro!'
-    ]);
-    if (pct >= 71) return pick([
-      '📈 ¡Buen trabajo! Tenés una base firme. Con constancia y repaso vas a seguir creciendo rápidamente.',
-      '📈 Progreso constante. Estás construyendo un conocimiento sólido, ladrillo tras ladrillo.',
-      '🔬 Buen rendimiento. La ciencia médica se domina con práctica y paciencia.',
-      '🌿 Crecimiento evidente. Cada acierto es una hoja nueva en el árbol de tu aprendizaje.'
-    ]);
-    if (pct >= 61) return pick([
-      '🔍 Vas por buen camino. Cada error es una oportunidad de aprendizaje. ¡Seguí adelante con determinación!',
-      '🩺 Aprendizaje en movimiento. Cada error te acerca más a la excelencia.',
-      '📖 Estás en la zona de crecimiento. Los mejores médicos también tuvieron preguntas que responder.',
-      '⚕️ Cada desafío superado te prepara para el próximo. Seguí con esa determinación.'
-    ]);
-    if (pct >= 51) return pick([
-      '🌱 Estás en la mitad del camino. La medicina se aprende paso a paso. ¡Tu esfuerzo de hoy es tu éxito de mañana!',
-      '🧠 La mitad del camino ya está recorrida. El conocimiento se construye con cada paso.',
-      '🌱 Tu esfuerzo está rindiendo frutos. Seguí cultivando tu saber, la cosecha llegará.',
-      '📚 Vas encontrando tu ritmo. La medicina se aprende como se construye un hogar: ladrillo a ladrillo.'
-    ]);
-    if (pct >= 41) return pick([
-      '🔥 No te rindas. Los mejores médicos también tuvieron momentos difíciles. Cada intento te hace más fuerte.',
-      '🕯️ No hay médico que no haya atravesado momentos de duda. Este resultado es parte de tu proceso.',
-      '💪 La fortaleza no es no caer, sino levantarse con más conocimiento que antes.',
-      '🌄 Cada amanecer trae una nueva oportunidad para aprender. Seguí adelante.'
-    ]);
-    if (pct >= 31) return pick([
-      '💡 Este resultado te muestra exactamente dónde enfocar tu energía. ¡Esa claridad es un regalo valioso!',
-      '🔎 Claridad. Ahora sabés exactamente dónde enfocar tu energía. Eso es un paso adelante.',
-      '🎯 Cada respuesta que no acertaste te regaló una pista valiosa. Aprovechala.',
-      '🪴 Este es el terreno fértil donde germinará tu dominio. Seguí regando tu estudio.'
-    ]);
-    if (pct >= 21) return pick([
-      '❤️ El comienzo siempre es el más duro. Lo importante no es dónde empezás, sino la decisión de seguir intentándolo.',
-      '❤️‍🩹 Los inicios siempre son desafiantes. Lo valioso no es dónde empezás, sino hacia dónde te dirigís.',
-      '🌱 Las raíces más profundas pertenecen a los árboles que crecieron con paciencia. Tu momento está por llegar.'
-    ]);
-    return pick([
-      '🌅 Cada experto fue alguna vez un principiante. Hoy es solo el inicio de tu transformación. ¡Volvé a intentarlo con confianza!',
-      '🌅 La excelencia no es un destino, es un camino. Hoy diste el primer paso. Mañana darás otro.',
-      '🕊️ No hay fracaso, solo información. Este resultado te dice con claridad por dónde empezar a construir.',
-      '🎨 Cada gran obra comienza con un boceto. Tu versión final de experto está en proceso.'
-    ]);
+  function saveScrollPosition() {
+    const scrollPosition = window.pageYOffset || document.documentElement.scrollTop;
+    localStorage.setItem(SCROLL_POSITION_KEY, scrollPosition.toString());
   }
 
-  /* ─────────────────────────────────────────────────────────
-     INTEGRACIÓN CON script.js
-     
-     En lugar de parchear generarCuestionario con polling (frágil),
-     exponemos renderOAV y oavState globalmente para que script.js
-     los llame directamente al final de generarCuestionario.
-     
-     script.js ya tiene el llamado integrado:
-       if (typeof window._oavRenderOAV === 'function') {
-         window._oavRenderOAV(seccionId);
-       }
-     
-     Esto garantiza que el modo tarjetita se active siempre,
-     sin importar la velocidad de carga del navegador.
-  ───────────────────────────────────────────────────────── */
+  function restoreScrollPosition() {
+    const lastSection = localStorage.getItem(LAST_SECTION_KEY);
+    scrollToSectionItem(lastSection);
+  }
 
-  // Exponer funciones para script.js y para debug
-  window._oavRenderOAV = renderOAV;
-  window._oavState     = oavState;
+  function clearScrollPosition() {
+    localStorage.removeItem(SCROLL_POSITION_KEY);
+    localStorage.removeItem(LAST_SECTION_KEY);
+  }
 
-  /* ─── Acciones de la pantalla de resultados ─── */
-  window._oavVolverAlMenu = function(seccionId) {
-    _clearSessionMarks(seccionId); // Borrar marcas pendientes al salir (Casos 2, 6)
-    try {
-      const raw = localStorage.getItem('quiz_state_v3');
-      const all = JSON.parse(raw || '{}');
-      if (all[seccionId]) { delete all[seccionId]; localStorage.setItem('quiz_state_v3', JSON.stringify(all)); }
-    } catch(e) {}
-    if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionId]) {
-      const len = (window.preguntasPorSeccion && window.preguntasPorSeccion[seccionId] || []).length;
-      window.puntajesPorSeccion[seccionId] = Array(len).fill(null);
-    }
-    if (typeof window.volverAlMenu === 'function') {
-      window.volverAlMenu();
-    } else if (typeof window.showMenu === 'function') {
-      window.showMenu();
-    }
-  };
+  // ======== Función para manejar el historial del navegador ========
+  function setupBrowserNavigation() {
+    window.addEventListener('popstate', function(event) {
+      // Ocultar panel de respuestas si estaba visible
+      const _prc2 = document.getElementById('panel-respuestas-correctas');
+      if (_prc2 && !_prc2.classList.contains('oculto')) _prc2.classList.add('oculto');
+      const _pre3 = document.getElementById('pagina-respuestas-examen');
+      if (_pre3) _pre3.classList.remove('activa');
 
-  window._oavVolverAlSubmenu = function(seccionId) {
-    _clearSessionMarks(seccionId); // Borrar marcas pendientes al volver al submenú (Casos 3, 9)
-    try {
-      const raw = localStorage.getItem('quiz_state_v3');
-      const all = JSON.parse(raw || '{}');
-      if (all[seccionId]) { delete all[seccionId]; localStorage.setItem('quiz_state_v3', JSON.stringify(all)); }
-    } catch(e) {}
-    if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionId]) {
-      const len = (window.preguntasPorSeccion && window.preguntasPorSeccion[seccionId] || []).length;
-      window.puntajesPorSeccion[seccionId] = Array(len).fill(null);
-    }
-    // Detectar el submenú correspondiente basado en la sección
-    const submenuId = seccionId.startsWith('iar') ? 'iar-submenu' : 'submenu';
-    if (typeof window.volverAlSubmenu === 'function') {
-      window.volverAlSubmenu(submenuId);
-    } else {
-      // Fallback: ir al menú principal
-      if (typeof window.volverAlMenu === 'function') window.volverAlMenu();
-    }
-  };
-
-  window._oavAvanzarSiguiente = function(seccionActual, seccionSiguiente) {
-    _clearSessionMarks(seccionActual); // Borrar marcas pendientes al avanzar de sección
-    try {
-      const raw = localStorage.getItem('quiz_state_v3');
-      const all = JSON.parse(raw || '{}');
-      if (all[seccionActual]) { delete all[seccionActual]; localStorage.setItem('quiz_state_v3', JSON.stringify(all)); }
-    } catch(e) {}
-    if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionActual]) {
-      const len = (window.preguntasPorSeccion && window.preguntasPorSeccion[seccionActual] || []).length;
-      window.puntajesPorSeccion[seccionActual] = Array(len).fill(null);
-    }
-    if (typeof window.mostrarCuestionario === 'function') {
-      window.mostrarCuestionario(seccionSiguiente);
-    }
-  };
-
-  /* ── Resaltar texto buscado dentro del wrapper OAV ── */
-  function _resaltarTextoBuscadoOAV(container, query) {
-    if (!query || query.length < 2) return;
-    var queryLower = query.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
-    var nodos = [];
-    var node;
-    while ((node = walker.nextNode())) nodos.push(node);
-    nodos.forEach(function(textNode) {
-      var text = textNode.textContent;
-      var textNorm = text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      var idx = textNorm.indexOf(queryLower);
-      if (idx === -1) return;
-      var frag = document.createDocumentFragment();
-      var lastIdx = 0;
-      while (idx !== -1) {
-        frag.appendChild(document.createTextNode(text.substring(lastIdx, idx)));
-        var mark = document.createElement('mark');
-        mark.className = 'buscador-texto-highlight';
-        mark.textContent = text.substring(idx, idx + queryLower.length);
-        frag.appendChild(mark);
-        lastIdx = idx + queryLower.length;
-        idx = textNorm.indexOf(queryLower, lastIdx);
+      // Si es un estado de respuestas de examen individual, mostrar submenú
+      if (event.state && event.state.respuestasExamen) {
+        mostrarRespuestasExamen(event.state.respuestasExamen);
+        return;
       }
-      frag.appendChild(document.createTextNode(text.substring(lastIdx)));
-      textNode.parentNode.replaceChild(frag, textNode);
+      // Si es el submenú de respuestas
+      if (event.state && event.state.respuestas) {
+        mostrarRespuestasCorrectas();
+        return;
+      }
+
+      // Detectar si veníamos del buscador
+      const desdeBuscador = (typeof navegacionOrigen !== 'undefined' && navegacionOrigen === 'buscador') ||
+                            (function(){ try { return sessionStorage.getItem('buscador_origen') === '1'; } catch(e){ return false; }})();
+
+      if (event.state && event.state.section) {
+        showSection(event.state.section);
+      } else if (event.state && event.state.submenu) {
+        // Si venimos del buscador, volver al buscador
+        if (desdeBuscador) {
+          window.volverAlBuscador && window.volverAlBuscador();
+          return;
+        }
+        const submenuId = event.state.submenu;
+        const lastSec = localStorage.getItem(LAST_SECTION_KEY);
+        currentSection = null;
+        document.getElementById("menu-principal")?.classList.add("oculto");
+        document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+        document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
+        const submenu = document.getElementById(submenuId);
+        if (submenu) submenu.style.display = "block";
+        scrollToSectionItem(lastSec);
+      } else {
+        // Si venimos del buscador, volver al buscador
+        if (desdeBuscador) {
+          window.volverAlBuscador && window.volverAlBuscador();
+          return;
+        }
+        showMenu();
+      }
+    });
+    
+    if (window.location.hash === '' || window.location.hash === '#menu') {
+      history.replaceState({ section: null }, 'Menú Principal', '#menu');
+    }
+  }
+
+  // ======== Cargar estado de una sección desde Firestore si no existe en local ========
+  // ======== Cargar estado de una sección desde Firestore (FIRESTORE ES LA FUENTE DE VERDAD) ========
+  // Firestore siempre tiene prioridad sobre localStorage si tiene más respuestas calificadas,
+  // o si el cuestionario ya fue completado (totalShown). Esto permite sincronizar entre dispositivos.
+  function _cargarEstadoSeccionDesdeFS(seccionId, callback) {
+    // Si no hay Firestore disponible, usar estado local
+    if (!_firestoreUID || !_firestoreDB) {
+      if (typeof callback === 'function') callback();
+      return;
+    }
+
+    // Contar respuestas calificadas locales para comparar con Firestore
+    const localState = state[seccionId];
+    const localGradedCount = localState && localState.graded
+      ? Object.keys(localState.graded).filter(function(k){ return localState.graded[k]; }).length
+      : 0;
+
+    // Cargar desde Firestore y comparar — Firestore es la fuente de verdad
+    _sincronizandoDesdeFS = true;
+    import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js").then(function(fsModule) {
+      const docRef = fsModule.doc(_firestoreDB, 'progreso', _firestoreUID, 'secciones', seccionId);
+      return fsModule.getDoc(docRef);
+    }).then(function(snap) {
+      if (snap && snap.exists()) {
+        const data = snap.data();
+        delete data._ts;
+        const fsGradedCount = data.graded
+          ? Object.keys(data.graded).filter(function(k){ return data.graded[k]; }).length
+          : 0;
+        const fsHayAnswers = data.answers && Object.keys(data.answers).some(function(k){
+          var a = data.answers[k]; return Array.isArray(a) && a.length > 0;
+        });
+
+        // Firestore gana si: tiene más respuestas calificadas, o tiene totalShown,
+        // o local está vacío pero Firestore tiene algo
+        if (fsGradedCount > localGradedCount || data.totalShown || (fsHayAnswers && localGradedCount === 0)) {
+          state[seccionId] = data;
+          saveJSON(STORAGE_KEY, state);
+          console.log('[IAR Sync] ✅ Firestore tiene más progreso (' + fsGradedCount + ' vs ' + localGradedCount + ') — cargado:', seccionId);
+        } else if (localGradedCount > 0) {
+          // Local tiene igual o más progreso — conservar local pero guardar en Firestore
+          console.log('[IAR Sync] ℹ️ Local tiene progreso igual/mayor (' + localGradedCount + ' vs ' + fsGradedCount + ') — usando local y sincronizando:', seccionId);
+          _guardarSeccionFirestore(seccionId);
+        }
+      } else if (localGradedCount > 0) {
+        // No hay nada en Firestore pero sí local — subir a Firestore
+        console.log('[IAR Sync] ℹ️ Subiendo progreso local a Firestore (no existía en nube):', seccionId);
+        _guardarSeccionFirestore(seccionId);
+      }
+      _sincronizandoDesdeFS = false;
+      if (typeof callback === 'function') callback();
+    }).catch(function(err) {
+      console.warn('[IAR Sync] No se pudo cargar estado de sección desde Firestore:', seccionId, err.code || err.message);
+      _sincronizandoDesdeFS = false;
+      if (typeof callback === 'function') callback();
     });
   }
 
-  console.log('[OAV] ✅ Modo una-pregunta-por-vez listo.');
+  function showSection(seccionId) {
+    // ── BLOQUEO DEMO ──
+    // Caso 1: licencia ya verificada → bloquear inmediatamente
+    if (window._demoCheckEnabled && window._demoSeccionesPermitidas) {
+      const esPermitida = window._demoSeccionesPermitidas.includes(seccionId);
+      const esSimulacro = seccionId === 'simulacro_iar';
+      if (!esPermitida || esSimulacro) {
+        if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
+        return;
+      }
+    }
+    // Caso 2: simulacro pedido ANTES de que la licencia esté verificada (F5 rápido)
+    // Usar _licenciaYaVerificada (true para cualquier usuario) para evitar loop.
+    if (seccionId === 'simulacro_iar' && !window._licenciaYaVerificada) {
+      if (window._licenciaVerificada) {
+        window._licenciaVerificada.then(function(lic) {
+          if (!lic.esDemo) showSection(seccionId);
+          else if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
+        });
+        return;
+      }
+    }
+    currentSection = seccionId;
+    // Ocultar botón flotante en páginas de cuestionario
+    const _btnFloat = document.getElementById("btn-ver-progreso");
+    if (_btnFloat) _btnFloat.style.display = "none";
+    const _panelFloat = document.getElementById("panel-progreso");
+    if (_panelFloat) _panelFloat.style.display = "none";
+    document.getElementById("menu-principal")?.classList.add("oculto");
+    const _pb = document.getElementById('buscador-preguntas');
+    if (_pb) _pb.classList.add('oculto');
+    document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+    document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
 
-  /* ================================================================
-     SISTEMA DE COMENTARIOS POR PREGUNTA — v2
-     - Usuarios con licencia completa: leer y escribir
-     - Admin: leer, escribir, eliminar (individual / todos), pausar
-     - Demo: solo lectura (sin formulario)
-     - Moderación automática de lenguaje inapropiado / spam / URLs
-       (lista ajustada para contexto médico, evita falsos positivos)
-     - Datos en Firestore: comentarios/{seccionId}_{idx}/mensajes/{docId}
-       Campos: { uid, nombre, email, texto, timestamp, seccionId, preguntaIdx }
-     - Control de pausa en Firestore: config/comentarios_pausa
-       Campos: { global: bool, cuestionarios: {[seccionId]: bool}, preguntas: {[clave]: bool} }
-  ================================================================ */
+    navBarModo = 'normal';
+    renderNavBar();
 
-  // ── Inyectar estilos ─────────────────────────────────────────────
-  (function _inyectarEstilosComentarios() {
-    const STYLE_ID = 'iar-comentarios-styles';
-    if (document.getElementById(STYLE_ID)) return;
-    const s = document.createElement('style');
-    s.id = STYLE_ID;
-    s.textContent = `
-      .iar-comentarios {
-        margin-top: 18px;
-        border-top: 2px solid #2563eb22;
-        padding-top: 14px;
-        font-family: 'DM Sans', system-ui, sans-serif;
-      }
-      .iar-com-titulo {
-        display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
-        font-size: 0.8rem; font-weight: 700; color: #1e293b;
-        margin-bottom: 10px; letter-spacing: 0.03em; text-transform: uppercase;
-      }
-      .iar-com-titulo .badge {
-        background: #2563eb; color: #fff; border-radius: 100px;
-        padding: 1px 8px; font-size: 0.7rem; font-weight: 700;
-        letter-spacing: 0; text-transform: none;
-      }
-      /* ── Barra de herramientas Admin ── */
-      .iar-admin-toolbar {
-        display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
-        background: #eff6ff; border: 1px solid #bfdbfe;
-        border-radius: 10px; padding: 8px 11px; margin-bottom: 10px;
-        font-size: 0.72rem;
-      }
-      .iar-admin-toolbar-label {
-        font-weight: 700; color: #1d4ed8; font-size: 0.68rem;
-        text-transform: uppercase; letter-spacing: 0.04em; margin-right: 2px;
-        white-space: nowrap;
-      }
-      .iar-admin-btn {
-        display: inline-flex; align-items: center; gap: 4px;
-        border: none; border-radius: 7px; padding: 4px 10px;
-        font-size: 0.72rem; font-weight: 700; cursor: pointer;
-        font-family: 'DM Sans', system-ui, sans-serif;
-        transition: background .15s, transform .1s, opacity .15s;
-        white-space: nowrap;
-      }
-      .iar-admin-btn:hover { transform: translateY(-1px); opacity: .88; }
-      .iar-admin-btn:active { transform: none; opacity: 1; }
-      .iar-admin-btn.borrar-todos  { background: #fee2e2; color: #dc2626; }
-      .iar-admin-btn.pausar-preg   { background: #fef9c3; color: #92400e; }
-      .iar-admin-btn.pausar-cuest  { background: #fde68a; color: #78350f; }
-      .iar-admin-btn.pausar-global { background: #fca5a5; color: #7f1d1d; }
-      .iar-admin-btn.activo        { outline: 2px solid currentColor; }
-      /* ── Lista y ítems ── */
-      .iar-com-lista {
-        display: flex; flex-direction: column; gap: 8px;
-        margin-bottom: 10px; max-height: 300px; overflow-y: auto; padding-right: 3px;
-      }
-      .iar-com-lista::-webkit-scrollbar { width: 4px; }
-      .iar-com-lista::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-      .iar-com-item {
-        background: #f8fafc; border: 1px solid #e2e8f0;
-        border-radius: 10px; padding: 9px 12px; position: relative;
-        padding-right: 34px;
-      }
-      .iar-com-item.es-admin { background: #eff6ff; border-color: #bfdbfe; }
-      .iar-com-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 3px; }
-      .iar-com-autor { font-weight: 700; font-size: 0.78rem; color: #1e293b; }
-      .iar-com-autor.admin-tag::after {
-        content: ' 👨‍⚕️ Admin'; background: #2563eb; color: #fff;
-        border-radius: 100px; padding: 1px 7px; font-size: 0.63rem;
-        font-weight: 700; margin-left: 4px;
-      }
-      .iar-com-fecha { font-size: 0.67rem; color: #94a3b8; }
-      .iar-com-texto { font-size: 0.84rem; color: #334155; line-height: 1.55; word-break: break-word; }
-      .iar-com-del {
-        position: absolute; top: 7px; right: 8px;
-        background: none; border: none; cursor: pointer;
-        color: #cbd5e1; font-size: 0.9rem; padding: 2px 5px;
-        border-radius: 5px; transition: color .15s, background .15s; line-height: 1;
-      }
-      .iar-com-del:hover { color: #dc2626; background: #fee2e2; }
-      /* ── Skeleton ── */
-      .iar-skeleton { display: flex; flex-direction: column; gap: 7px; margin-bottom: 8px; }
-      .iar-skeleton-item {
-        background: linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);
-        background-size: 200% 100%; animation: iar-shimmer 1.4s infinite;
-        border-radius: 10px; height: 52px;
-      }
-      .iar-skeleton-item.short { height: 36px; }
-      @keyframes iar-shimmer {
-        0%   { background-position: 200% 0; }
-        100% { background-position: -200% 0; }
-      }
-      .iar-com-vacio { text-align: center; color: #94a3b8; font-size: 0.79rem; padding: 8px 0 4px; font-style: italic; }
-      /* ── Banner de pausa ── */
-      .iar-com-pausado {
-        background: #fef3c7; border: 1px solid #fde68a; border-radius: 10px;
-        padding: 10px 14px; font-size: 0.8rem; color: #92400e;
-        display: flex; align-items: center; gap: 7px; margin-top: 6px;
-      }
-      /* ── Formulario ── */
-      .iar-com-form { display: flex; flex-direction: column; gap: 7px; margin-top: 4px; }
-      .iar-com-ta {
-        width: 100%; min-height: 66px; max-height: 130px;
-        border: 1.5px solid #e2e8f0; border-radius: 10px;
-        padding: 9px 12px; font-family: 'DM Sans', system-ui, sans-serif;
-        font-size: 0.85rem; color: #1e293b; resize: vertical; outline: none;
-        transition: border-color .15s; background: #fff; box-sizing: border-box;
-      }
-      .iar-com-ta:focus { border-color: #2563eb; box-shadow: 0 0 0 3px #2563eb18; }
-      .iar-com-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-      .iar-com-cc { font-size: 0.69rem; color: #94a3b8; }
-      .iar-com-cc.cerca  { color: #d97706; font-weight: 600; }
-      .iar-com-cc.maximo { color: #dc2626; font-weight: 700; }
-      .iar-com-btn {
-        background: #2563eb; color: #fff; border: none; border-radius: 8px;
-        padding: 7px 17px; font-size: 0.81rem; font-weight: 700; cursor: pointer;
-        transition: background .15s, transform .1s; font-family: 'DM Sans', system-ui, sans-serif;
-        display: flex; align-items: center; gap: 5px;
-      }
-      .iar-com-btn:hover:not(:disabled) { background: #1d4ed8; transform: translateY(-1px); }
-      .iar-com-btn:disabled { background: #93c5fd; cursor: not-allowed; transform: none; }
-      .iar-com-err {
-        background: #fee2e2; color: #dc2626; border: 1px solid #fecaca;
-        border-radius: 8px; padding: 7px 11px; font-size: 0.79rem; display: none;
-      }
-      .iar-com-ok {
-        background: #d1fae5; color: #059669; border: 1px solid #a7f3d0;
-        border-radius: 8px; padding: 7px 11px; font-size: 0.79rem; display: none;
-      }
-      .iar-com-demo {
-        background: #fef3c7; border: 1px solid #fde68a; border-radius: 8px;
-        padding: 8px 12px; font-size: 0.77rem; color: #92400e;
-        display: flex; align-items: center; gap: 6px; margin-top: 4px;
-      }
-      @media (max-width: 500px) {
-        .iar-com-lista { max-height: 200px; }
-        .iar-com-btn { padding: 6px 12px; font-size: 0.77rem; }
-        .iar-admin-btn { padding: 4px 7px; font-size: 0.68rem; }
-      }
-    `;
-    document.head.appendChild(s);
-  })();
+    const page = document.getElementById(seccionId);
+    if (!page) return;
+    page.classList.add("activa");
+    window.scrollTo(0, 0);
 
-  // ── Lista de términos prohibidos (moderación) ────────────────────
-  // NOTA: ajustada para contexto médico.
-  // Se evitan subcadenas que produzcan falsos positivos en terminología
-  // médica (ej: "anal", "recto", "pene", "vagina", "boca", "culo" como
-  // término anatómico neutro en algunos contextos) — solo se bloquean
-  // expresiones claramente ofensivas o amenazantes.
-  const _COM_PROHIBIDAS = [
-    // Insultos directos en español rioplatense / latinoamericano
-    'pelotud','bolud','forro','hdp','hijodeputa','hijo de puta',
-    'puta que te pario','puta madre',
-    'zorra','imbecil','tarad','mogol',
-    'jodete','andate a la mierda','chupala',
-    'sorete','cagon','cagón','lacra',
-    'negro de mierda','sudaca de mierda',
-    // Insultos en inglés
-    'fuck you','fuck off','motherfuck','nigger','faggot',
-    'dumbass','dickhead','asshole','shithead',
-    // Amenazas
-    'te voy a matar','te mato','te pego','me las vas a pagar',
-    'te voy a cagar a palos',
-    // Spam / URLs
-    'http://','https://','www.',
-    'click aqui','click acá','gana dinero','ganá dinero',
-    'whatsapp.com','telegram.me','discord.gg',
+    // Simulacro IAR: SIEMPRE pasar por inicializarSimulacroIAR (maneja progreso y nuevo)
+    if (seccionId === 'simulacro_iar') {
+      window.inicializarSimulacroIAR && window.inicializarSimulacroIAR();
+      return;
+    }
+
+    // Si las preguntas ya están en memoria, generar directamente
+    if (preguntasPorSeccion[seccionId]) {
+      // Cargar estado desde Firestore si no hay estado local para esta sección
+      _cargarEstadoSeccionDesdeFS(seccionId, function() {
+        const _cb = window._buscadorPendienteScroll || null;
+        window._buscadorPendienteScroll = null;
+        generarCuestionario(seccionId, _cb);
+
+      });
+      return;
+    }
+
+    // Si no están en memoria, mostrar loading y cargar desde Firestore.
+    // firebase-auth.js es type="module" y se ejecuta DESPUÉS de script.js,
+    // por eso usamos polling hasta que window.cargarSeccionFirestore esté disponible.
+    const cont = document.getElementById(`cuestionario-${seccionId}`);
+    if (cont) {
+      cont.innerHTML = `
+        <div style="text-align:center;padding:60px 20px;color:#64748b;">
+          <div style="font-size:2rem;margin-bottom:12px;">⏳</div>
+          <div style="font-size:1rem;font-weight:600;">Cargando cuestionario...</div>
+        </div>`;
+    }
+
+    function _cargarConFirestore(intentos) {
+      if (currentSection !== seccionId) return;
+      console.log('[IAR DEBUG] intento=' + intentos + ' cargarSeccionFirestore=' + typeof window.cargarSeccionFirestore + ' seccion=' + seccionId);
+      if (window.cargarSeccionFirestore) {
+        window.cargarSeccionFirestore(seccionId).then(function(preguntas) {
+          console.log('[IAR DEBUG] Firestore respondió. preguntas=' + (preguntas ? preguntas.length : 'null') + ' seccion=' + seccionId);
+          if (preguntas) preguntasPorSeccion[seccionId] = preguntas;
+          if (currentSection === seccionId) {
+            // Cargar estado desde Firestore si no hay estado local para esta sección
+            _cargarEstadoSeccionDesdeFS(seccionId, function() {
+              const _cb = window._buscadorPendienteScroll || null;
+              window._buscadorPendienteScroll = null;
+              generarCuestionario(seccionId, _cb);
+
+            });
+          }
+        }).catch(function(err) {
+          console.error('Error cargando sección:', err);
+          if (cont && currentSection === seccionId) {
+            cont.innerHTML = `
+              <div style="text-align:center;padding:60px 20px;color:#dc2626;">
+                <div style="font-size:2rem;margin-bottom:12px;">⚠️</div>
+                <div style="font-size:1rem;font-weight:600;">Error al cargar el cuestionario.</div>
+                <div style="font-size:.88rem;margin-top:8px;">Verificá tu conexión e intentá nuevamente.</div>
+              </div>`;
+          }
+        });
+      } else if (intentos < 20) {
+        setTimeout(function() { _cargarConFirestore(intentos + 1); }, 200);
+      } else {
+        console.error('[IAR DEBUG] TIMEOUT: cargarSeccionFirestore nunca estuvo disponible');
+        if (cont && currentSection === seccionId) {
+          cont.innerHTML = `
+            <div style="text-align:center;padding:60px 20px;color:#dc2626;">
+              <div style="font-size:2rem;margin-bottom:12px;">⚠️</div>
+              <div style="font-size:1rem;font-weight:600;">No se pudo conectar con la base de datos.</div>
+              <div style="font-size:.88rem;margin-top:8px;">Recargá la página e intentá nuevamente.</div>
+            </div>`;
+        }
+      }
+    }
+    _cargarConFirestore(0);
+  }
+
+  function showMenu() {
+    // Mostrar botón flotante solo en menú principal
+    const _btnFloat = document.getElementById("btn-ver-progreso");
+    if (_btnFloat) _btnFloat.style.display = "";
+    // Cerrar panel de progreso si estaba abierto
+    const _panelFloat = document.getElementById("panel-progreso");
+    if (_panelFloat) _panelFloat.style.display = "none";
+
+
+
+    // Simulacro IAR: al salir al menú SIEMPRE limpiar el progreso (no se guarda)
+    // Excepción: si ya completó el cuestionario (totalShown), no limpiar para que vea el resultado
+    if (currentSection === 'simulacro_iar') {
+      var _simStateRaw = null;
+      try { _simStateRaw = JSON.parse(localStorage.getItem('quiz_state_v3') || '{}')['simulacro_iar']; } catch(e) {}
+      var _simCompleto = _simStateRaw && _simStateRaw.totalShown;
+      if (!_simCompleto) {
+        // Progreso incompleto → limpiar todo (no persistir)
+        _limpiarSimulacroIARSinProgreso();
+      }
+      // Si está completo, no limpiar — el usuario puede ver su resultado
+      // Early return — simulacro_iar no necesita el bloque general
+      currentSection = null;
+      document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+      document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
+      const _pbSim = document.getElementById('buscador-preguntas');
+      if (_pbSim) _pbSim.classList.add('oculto');
+      const _bfSim = document.getElementById('btn-volver-buscador');
+      if (_bfSim) _bfSim.style.display = 'none';
+      try { sessionStorage.removeItem('buscador_origen'); } catch(e) {}
+      try { localStorage.removeItem('buscador_ultimo_query_v1'); } catch(e) {}
+      const _inpSim = document.getElementById('buscador-input');
+      if (_inpSim) _inpSim.value = '';
+      const _resSim = document.getElementById('buscador-resultados');
+      if (_resSim) _resSim.innerHTML = '';
+      const _stSim = document.getElementById('buscador-stats');
+      if (_stSim) _stSim.style.display = 'none';
+      document.getElementById("menu-principal")?.classList.remove("oculto");
+      restoreScrollPosition();
+      return;
+    }
+    
+    if (currentSection && preguntasPorSeccion[currentSection]) {
+      // Limpiar el estado completamente si se completó el cuestionario
+      clearSectionStateIfCompletedAndBack(currentSection);
+      
+      if (state[currentSection] && !state[currentSection].totalShown) {
+
+
+        // IMPORTANTE: leer progreso desde localStorage, no desde state en memoria,
+        // porque script_onebyone.js escribe directamente en quiz_state_v3 sin actualizar state.
+        const hayProgreso = _hayProgresoEnStorage(currentSection);
+
+        if (hayProgreso) {
+          // Sincronizar state en memoria con localStorage antes de continuar
+          _sincronizarStateDesdeStorage(currentSection);
+          // Persistir el indice OAV actual para restaurar la posicion al volver
+          _persistirIndiceOAVActual(currentSection);
+          console.log('Volvio con progreso → estado conservado');
+        } else {
+          limpiarSeccion(currentSection, true);
+          console.log('Volvio sin progreso → opciones re-aleatorizadas');
+        }
+      }
+    }
+    
+    currentSection = null;
+    document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+    document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
+
+    // Ocultar panel del buscador y limpiar búsqueda
+    const _pb = document.getElementById('buscador-preguntas');
+    if (_pb) _pb.classList.add('oculto');
+    const _bf = document.getElementById('btn-volver-buscador');
+    if (_bf) _bf.style.display = 'none';
+    try { sessionStorage.removeItem('buscador_origen'); } catch(e) {}
+    try { localStorage.removeItem('buscador_ultimo_query_v1'); } catch(e) {}
+    // Limpiar visualmente el buscador
+    const _inp = document.getElementById('buscador-input');
+    if (_inp) _inp.value = '';
+    const _res = document.getElementById('buscador-resultados');
+    if (_res) _res.innerHTML = '';
+    const _st = document.getElementById('buscador-stats');
+    if (_st) _st.style.display = 'none';
+
+    // Mostrar menú principal
+    document.getElementById("menu-principal")?.classList.remove("oculto");
+
+    // Siempre actualizar el hash a #menu al volver al menú principal
+    if (window.location.hash !== '#menu') {
+      history.replaceState({ section: null }, 'Menú Principal', '#menu');
+    }
+
+    restoreScrollPosition();
+  }
+
+  let lastShuffleTemp = {};
+
+  // ======== Helper: limpiar índice de navegación OAV del localStorage ========
+  function _limpiarOAVIdx(seccionId) {
+    try {
+      var raw = localStorage.getItem('oav_current_idx_v1');
+      if (!raw) return;
+      var all = JSON.parse(raw);
+      delete all[seccionId];
+      localStorage.setItem('oav_current_idx_v1', JSON.stringify(all));
+    } catch(e) {}
+  }
+
+
+  // ======== Helper: leer si una sección tiene progreso en localStorage ========
+  // IMPORTANTE: script_onebyone.js escribe en quiz_state_v3 directamente
+  // sin actualizar el objeto `state` en memoria. Por eso hay que leer desde localStorage.
+  function _hayProgresoEnStorage(seccionId) {
+    if (!seccionId) return false;
+    try {
+      var raw = localStorage.getItem('quiz_state_v3');
+      if (!raw) return false;
+      var all = JSON.parse(raw);
+      var s = all[seccionId];
+      if (!s) return false;
+      // Si totalShown=true y NO hay graded ni answers, no hay progreso real
+      // (estado huérfano tras completar y volver)
+      var hayGraded = s.graded && Object.keys(s.graded).some(function(k){ return s.graded[k]; });
+      if (hayGraded) return true;
+      var hayAnswers = s.answers && Object.keys(s.answers).some(function(k){
+        var a = s.answers[k]; return Array.isArray(a) && a.length > 0;
+      });
+      return !!hayAnswers;
+    } catch(e) { return false; }
+  }
+
+  // ======== Helper: sincronizar state en memoria desde localStorage ========
+  // Necesario porque script_onebyone.js escribe en localStorage sin pasar por state en memoria.
+  function _sincronizarStateDesdeStorage(seccionId) {
+    try {
+      var raw = localStorage.getItem('quiz_state_v3');
+      if (!raw) return;
+      var all = JSON.parse(raw);
+      if (all[seccionId]) {
+        state[seccionId] = all[seccionId];
+      }
+    } catch(e) {}
+  }
+
+
+  // ======== Helper: persistir índice OAV actual en localStorage al salir con progreso ========
+  function _persistirIndiceOAVActual(seccionId) {
+    if (!seccionId) return;
+    try {
+      var idx = null;
+      if (window._oavGetCurrentIdx) {
+        idx = window._oavGetCurrentIdx(seccionId);
+      } else if (window._oavState && window._oavState[seccionId] != null) {
+        idx = window._oavState[seccionId].currentIdx;
+      }
+      if (idx == null || typeof idx !== 'number') return;
+      var all = JSON.parse(localStorage.getItem('oav_current_idx_v1') || '{}');
+      all[seccionId] = idx;
+      localStorage.setItem('oav_current_idx_v1', JSON.stringify(all));
+    } catch(e) {}
+  }
+
+  // ======== Helper: limpiar sección con o sin aleatorización de opciones ========
+  // aleatorizar=true  → borra shuffleMap → las opciones se re-mezclan al regenerar
+  // aleatorizar=false → conserva shuffleMap → las opciones mantienen el orden previo
+  function limpiarSeccion(seccionId, aleatorizar) {
+    const s = state[seccionId];
+    _limpiarOAVIdx(seccionId);
+
+    if (aleatorizar) {
+      // Borrar completamente → nueva aleatorización de preguntas y opciones al regenerar
+      delete state[seccionId];
+    } else {
+      // Conservar shuffleMap (orden de opciones) y unansweredOrder (orden de preguntas)
+      const shuffleMapGuardado = (s && s.shuffleMap)
+        ? JSON.parse(JSON.stringify(s.shuffleMap))
+        : {};
+      const answeredOrderGuardado = s && s.answeredOrder ? s.answeredOrder.slice() : [];
+      const unansweredOrderGuardado = s && s.unansweredOrder ? s.unansweredOrder.slice() : [];
+
+      state[seccionId] = {
+        shuffleFrozen: true,
+        shuffleMap: shuffleMapGuardado,
+        answeredOrder: [],
+        // Restaurar todas las preguntas al orden no-respondido, preservando su secuencia
+        unansweredOrder: [...answeredOrderGuardado, ...unansweredOrderGuardado],
+        answers: {},
+        graded: {},
+        totalShown: false,
+        explanationShown: {}
+      };
+    }
+
+    saveJSON(STORAGE_KEY, state);
+    // Borrar también en Firestore para que al volver no se restaure el progreso viejo
+    _borrarSeccionFirestore(seccionId);
+
+    if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionId]) {
+      window.puntajesPorSeccion[seccionId] = Array(
+        (preguntasPorSeccion[seccionId] || []).length
+      ).fill(null);
+    }
+
+    const resultadoTotal = document.getElementById(`resultado-total-${seccionId}`);
+    if (resultadoTotal) {
+      resultadoTotal.innerHTML = "";
+      resultadoTotal.className = "resultado-final";
+    }
+  }
+
+  function shuffle(arr, qKey = null) {
+    const a = arr.slice();
+
+    let seed = Date.now();
+    function random() {
+      seed ^= seed << 13;
+      seed ^= seed >> 17;
+      seed ^= seed << 5;
+      return Math.abs(seed) / 0xFFFFFFFF;
+    }
+
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+
+    if (qKey) {
+      const prev = lastShuffleTemp[qKey];
+      let attempts = 0;
+      while (prev && JSON.stringify(prev) === JSON.stringify(a) && attempts < 10) {
+        for (let i = a.length - 1; i > 0; i--) {
+          const j = Math.floor(random() * (i + 1));
+          [a[i], a[j]] = [a[j], a[i]];
+        }
+        attempts++;
+      }
+      lastShuffleTemp[qKey] = a.slice();
+    }
+
+    return a;
+  }
+
+  function ensureSectionState(seccionId, preguntasLen) {
+    if (!state[seccionId]) {
+      console.log('🆕 Inicializando estado para:', seccionId);
+      state[seccionId] = {
+        shuffleFrozen: false,
+        shuffleMap: {},
+        answeredOrder: [], // Solo guardamos el orden de las respondidas
+        unansweredOrder: [], // Orden aleatorizado de las sin responder (se mantiene durante la sesión)
+        answers: {},
+        graded: {},
+        totalShown: false,
+        explanationShown: {}  // tracking de explicaciones mostradas
+      };
+    }
+    
+    // Asegurar que exista unansweredOrder si no está (compatibilidad con estados antiguos)
+    if (!state[seccionId].unansweredOrder) {
+      state[seccionId].unansweredOrder = [];
+    }
+    
+    if (!window.puntajesPorSeccion) window.puntajesPorSeccion = {};
+    if (!window.puntajesPorSeccion[seccionId]) {
+      window.puntajesPorSeccion[seccionId] = Array(preguntasLen).fill(null);
+    }
+  }
+
+  function getSectionTitle(seccionId) {
+    const page = document.getElementById(seccionId);
+    if (!page) return cap(seccionId);
+    const h1 = page.querySelector("h1, h2, .titulo-seccion");
+    return (h1 && h1.textContent.trim()) || cap(seccionId);
+  }
+
+  // Devuelve mapping inverso mezclado -> original y opciones mezcladas
+  function getOrBuildShuffleForQuestion(seccionId, qIndex, opciones) {
+    const s = state[seccionId];
+    if (s.shuffleMap[qIndex]) {
+      const inv = s.shuffleMap[qIndex];
+      const opcionesMezcladas = [];
+      Object.keys(inv).forEach(mixed => {
+        const original = inv[mixed];
+        opcionesMezcladas[mixed] = opciones[original];
+      });
+      return { inv, opcionesMezcladas };
+    }
+    
+    const indices = opciones.map((_, i) => i);
+    const shuffled = shuffle(indices, seccionId + "-" + qIndex);
+    const inv = {};
+    shuffled.forEach((origIdx, mixedIdx) => {
+      inv[mixedIdx] = origIdx;
+    });
+    const opcionesMezcladas = shuffled.map(i => opciones[i]);
+    return { inv, opcionesMezcladas };
+  }
+
+  // Congela el shuffle de las opciones de UNA pregunta específica
+  function freezeShuffleForQuestion(seccionId, qIndex) {
+    const s = state[seccionId];
+    const cont = document.getElementById(`cuestionario-${seccionId}`);
+    if (!cont) return;
+
+    // Solo congelar esta pregunta específica
+    const inputs = cont.querySelectorAll(`input[name="pregunta${seccionId}${qIndex}"]`);
+    const inv = {};
+    inputs.forEach((input, mixedIdx) => {
+      const original = parseInt(input.getAttribute("data-original-index"), 10);
+      inv[mixedIdx] = isNaN(original) ? mixedIdx : original;
+    });
+    s.shuffleMap[qIndex] = inv;
+    console.log('🔒 Opciones congeladas para pregunta', qIndex, ':', inv);
+    saveJSON(STORAGE_KEY, state);
+  }
+
+  // Función legacy mantenida por compatibilidad
+  function freezeCurrentShuffle(seccionId) {
+    // Ya no congela todas, solo marca como congelado
+    const s = state[seccionId];
+    s.shuffleFrozen = true;
+    saveJSON(STORAGE_KEY, state);
+  }
+
+  function clearSectionStateIfCompletedAndBack(seccionId) {
+    const s = state[seccionId];
+    if (!s) return;
+    if (s.totalShown) {
+      delete state[seccionId];
+      saveJSON(STORAGE_KEY, state);
+      if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionId]) {
+        window.puntajesPorSeccion[seccionId] = Array(
+          (preguntasPorSeccion[seccionId] || []).length
+        ).fill(null);
+      }
+      const resultadoTotal = document.getElementById(`resultado-total-${seccionId}`);
+      if (resultadoTotal) {
+        resultadoTotal.textContent = "";
+        resultadoTotal.className = "resultado-final";
+      }
+    }
+  }
+
+  // ======== Función para mostrar/ocultar explicación ========
+  function mostrarExplicacion(seccionId, qIndex) {
+    // Solo permitir ver la explicación si ya se respondió la pregunta
+    if (!state[seccionId].graded || !state[seccionId].graded[qIndex]) {
+      alert("Debes responder la pregunta primero para ver la explicación.");
+      return;
+    }
+
+    const explicacionDiv = document.getElementById(`explicacion-${seccionId}-${qIndex}`);
+    const btnExplicacion = document.getElementById(`btn-explicacion-${seccionId}-${qIndex}`);
+    
+    if (explicacionDiv.style.display === "none" || explicacionDiv.style.display === "") {
+      // Mostrar explicación
+      explicacionDiv.style.display = "block";
+      btnExplicacion.textContent = "Ocultar explicación";
+      
+      // Marcar como mostrada
+      if (!state[seccionId].explanationShown) state[seccionId].explanationShown = {};
+      state[seccionId].explanationShown[qIndex] = true;
+      saveJSON(STORAGE_KEY, state);
+    } else {
+      // Ocultar explicación
+      explicacionDiv.style.display = "none";
+      btnExplicacion.textContent = "Ver explicación";
+      
+      // Marcar como oculta
+      state[seccionId].explanationShown[qIndex] = false;
+      saveJSON(STORAGE_KEY, state);
+    }
+  }
+
+  function restoreSelectionsAndGrades(seccionId) {
+    const s = state[seccionId];
+    if (!s) return;
+
+    const preguntas = preguntasPorSeccion[seccionId] || [];
+    preguntas.forEach((preg, idx) => {
+      const name = `pregunta${seccionId}${idx}`;
+      const inputs = Array.from(document.getElementsByName(name));
+      const guardadas = (s.answers && s.answers[idx]) || [];
+      guardadas.forEach(mixedIdx => {
+        if (inputs[mixedIdx]) inputs[mixedIdx].checked = true;
+      });
+
+      if (s.graded && s.graded[idx]) {
+        const puntajeElem = document.getElementById(`puntaje-${seccionId}-${idx}`);
+        const mInv = state[seccionId].shuffleMap[idx];
+        const seleccionOriginal = guardadas.map(i => mInv[i]).sort();
+        const correctaOriginal = preg.correcta.slice().sort();
+
+        const isCorrect = JSON.stringify(seleccionOriginal) === JSON.stringify(correctaOriginal);
+        if (isCorrect) {
+          puntajeElem.textContent = "✅ Correcto (+1)";
+        } else {
+          puntajeElem.textContent = "❌ Incorrecto (0)";
+        }
+
+        const correctasMezcladas = correctaOriginal.map(ori =>
+          parseInt(Object.keys(mInv).find(k => mInv[k] === ori), 10)
+        );
+        correctasMezcladas.forEach(i => {
+          if (!isNaN(i) && inputs[i]) {
+            inputs[i].parentElement.style.backgroundColor = "#eafaf1";
+            inputs[i].parentElement.style.borderColor = "#1e7e34";
+          }
+        });
+        guardadas.forEach(i => {
+          const idxOriginal = mInv[i];
+          if (!preg.correcta.includes(idxOriginal) && inputs[i]) {
+            inputs[i].parentElement.style.backgroundColor = "#fdecea";
+            inputs[i].parentElement.style.borderColor = "#c0392b";
+          }
+        });
+
+        inputs.forEach(inp => (inp.disabled = true));
+        const btn = inputs[0]?.closest(".pregunta")?.querySelector("button.btn-responder");
+        if (btn) btn.disabled = true;
+
+        if (!window.puntajesPorSeccion[seccionId]) window.puntajesPorSeccion[seccionId] = [];
+        window.puntajesPorSeccion[seccionId][idx] = isCorrect ? 1 : 0;
+      }
+
+      // Restaurar estado de explicación si estaba mostrada
+      if (s.explanationShown && s.explanationShown[idx]) {
+        const explicacionDiv = document.getElementById(`explicacion-${seccionId}-${idx}`);
+        const btnExplicacion = document.getElementById(`btn-explicacion-${seccionId}-${idx}`);
+        if (explicacionDiv && btnExplicacion) {
+          explicacionDiv.style.display = "block";
+          btnExplicacion.textContent = "Ocultar explicación";
+        }
+      }
+    });
+  }
+
+
+  function getDisplayOrder(seccionId, preguntasLen) {
+    const s = state[seccionId];
+
+    if (!s.answeredOrder) {
+      s.answeredOrder = [];
+    }
+
+    // Para IAR y simulacro_iar: orden secuencial fijo (0, 1, 2, ...)
+    const esIAR = seccionId.startsWith('iar') || seccionId.toLowerCase().includes('iar');
+    if (esIAR) {
+      const ordenSecuencial = [];
+      for (let i = 0; i < preguntasLen; i++) { ordenSecuencial.push(i); }
+      return ordenSecuencial;
+    }
+
+    // Para otros cuestionarios: respondidas arriba (orden fijo), no respondidas abajo (orden persistente)
+    const answered = s.answeredOrder.slice();
+    const unanswered = [];
+    for (let i = 0; i < preguntasLen; i++) {
+      if (!s.graded[i]) unanswered.push(i);
+    }
+
+    let shuffledUnanswered;
+    if (s.unansweredOrder.length === 0 ||
+        !unanswered.every(idx => s.unansweredOrder.includes(idx))) {
+      shuffledUnanswered = shuffle(unanswered, seccionId + '-unanswered-initial');
+      s.unansweredOrder = shuffledUnanswered.slice();
+      saveJSON(STORAGE_KEY, state);
+    } else {
+      shuffledUnanswered = s.unansweredOrder.filter(idx => !s.graded[idx]);
+    }
+
+    return [...answered, ...shuffledUnanswered];
+  }
+
+  // ======== Render del cuestionario ========
+  function generarCuestionario(seccionId, _onReady) {
+    const preguntas = preguntasPorSeccion[seccionId];
+    if (!preguntas) return;
+
+    ensureSectionState(seccionId, preguntas.length);
+
+    const cont = document.getElementById(`cuestionario-${seccionId}`);
+    if (!cont) return;
+    cont.innerHTML = "";
+
+    // Obtener orden de visualización (respondidas arriba fijas, no respondidas abajo aleatorias)
+    const displayOrder = getDisplayOrder(seccionId, preguntas.length);
+
+    // Renderizar preguntas según el orden de visualización
+    displayOrder.forEach((originalIdx, displayPosition) => {
+      const preg = preguntas[originalIdx];
+      const div = document.createElement("div");
+      div.className = "pregunta";
+      div.id = `pregunta-bloque-${seccionId}-${originalIdx}`;
+
+      // Cabecera resultado
+      const resultado = document.createElement("div");
+      resultado.id = `puntaje-${seccionId}-${originalIdx}`;
+      resultado.className = "resultado-pregunta";
+      resultado.textContent = "";
+      div.appendChild(resultado);
+
+      // Enunciado (mostramos el número de posición visual, no el índice original)
+      const h3 = document.createElement("h3");
+      h3.textContent = `${displayPosition + 1}. ${preg.pregunta}`;
+      div.appendChild(h3);
+
+
+// ========== CÓDIGO NUEVO - AGREGAR DESPUÉS DEL h3 ==========
+      // Mostrar imagen si existe
+      if (preg.imagen) {
+        const imgContainer = document.createElement("div");
+        imgContainer.style.marginTop = "15px";
+        imgContainer.style.marginBottom = "15px";
+        imgContainer.style.textAlign = "center";
+        
+        const img = document.createElement("img");
+        img.src = getImagenUrl(preg.imagen);
+        img.alt = "Imagen ECG";
+        img.style.maxWidth = "100%";
+        img.style.height = "auto";
+        img.style.border = "2px solid #ddd";
+        img.style.borderRadius = "8px";
+        img.style.boxShadow = "0 2px 8px rgba(0,0,0,0.1)";
+        
+        // Hacer clic en la imagen para verla más grande
+        img.style.cursor = "pointer";
+        img.onclick = function() {
+          window.open(this.src, '_blank');
+        };
+        
+        imgContainer.appendChild(img);
+        div.appendChild(imgContainer);
+      }
+      // ========== FIN DEL CÓDIGO NUEVO ==========
+
+      // Opciones (mezcladas)
+      const tipoInput = preg.multiple ? "checkbox" : "radio";
+      const { inv, opcionesMezcladas } = getOrBuildShuffleForQuestion(
+        seccionId,
+        originalIdx,
+        preg.opciones
+      );
+
+      opcionesMezcladas.forEach((opc, mixedIdx) => {
+        const label = document.createElement("label");
+        label.className = "opcion";
+        const input = document.createElement("input");
+        input.type = tipoInput;
+        input.name = `pregunta${seccionId}${originalIdx}`;
+        input.value = mixedIdx;
+        input.setAttribute("data-original-index", inv[mixedIdx]);
+        
+        input.addEventListener("change", () => {
+          // Al cambiar una opción, congelar las opciones de ESTA pregunta
+          if (!state[seccionId].shuffleMap[originalIdx]) {
+            freezeShuffleForQuestion(seccionId, originalIdx);
+          }
+          persistSelectionsForQuestion(seccionId, originalIdx);
+        });
+        
+        label.appendChild(input);
+        const spanTexto = document.createElement("span");
+        spanTexto.className = "opcion-texto";
+        spanTexto.textContent = " " + opc;
+        label.appendChild(spanTexto);
+        div.appendChild(label);
+      });
+
+      // Contenedor de botones
+      const botonesDiv = document.createElement("div");
+      botonesDiv.style.marginTop = "10px";
+      botonesDiv.style.display = "flex";
+      botonesDiv.style.gap = "10px";
+      botonesDiv.style.flexWrap = "wrap";
+
+      // Botón Responder
+      const btn = document.createElement("button");
+      btn.textContent = "Responder";
+      btn.className = "btn-responder";
+      btn.addEventListener("click", () => responderPregunta(seccionId, originalIdx));
+      botonesDiv.appendChild(btn);
+
+      // Botón Ver Explicación (solo si hay explicación)
+      if (preg.explicacion && preg.explicacion.trim() !== "") {
+        const btnExplicacion = document.createElement("button");
+        btnExplicacion.textContent = "Ver explicación";
+        btnExplicacion.className = "btn-explicacion";
+        btnExplicacion.id = `btn-explicacion-${seccionId}-${originalIdx}`;
+        btnExplicacion.addEventListener("click", () => mostrarExplicacion(seccionId, originalIdx));
+        botonesDiv.appendChild(btnExplicacion);
+      }
+
+      div.appendChild(botonesDiv);
+
+      // Div para la explicación (oculto por defecto)
+      if (preg.explicacion && preg.explicacion.trim() !== "") {
+        const explicacionDiv = document.createElement("div");
+        explicacionDiv.id = `explicacion-${seccionId}-${originalIdx}`;
+        explicacionDiv.className = "explicacion-contenedor";
+        explicacionDiv.style.display = "none";
+        explicacionDiv.style.marginTop = "15px";
+        explicacionDiv.style.padding = "15px";
+        explicacionDiv.style.backgroundColor = "#f8f9fa";
+        explicacionDiv.style.borderLeft = "4px solid #007bff";
+        explicacionDiv.style.borderRadius = "4px";
+        
+        const explicacionTitulo = document.createElement("strong");
+        explicacionTitulo.textContent = "Explicación:";
+        explicacionTitulo.style.display = "block";
+        explicacionTitulo.style.marginBottom = "8px";
+        explicacionTitulo.style.color = "#007bff";
+        
+        const explicacionTexto = document.createElement("p");
+        explicacionTexto.textContent = preg.explicacion;
+        explicacionTexto.style.margin = "0";
+        explicacionTexto.style.lineHeight = "1.6";
+        
+        explicacionDiv.appendChild(explicacionTitulo);
+        explicacionDiv.appendChild(explicacionTexto);
+
+        // Imagen de explicación (solo visible al abrir la explicación)
+        if (preg.imagen_explicacion) {
+          const imgExp = document.createElement("img");
+          imgExp.src = getImagenUrl(preg.imagen_explicacion);
+          imgExp.alt = "Imagen de la explicación";
+          imgExp.style.maxWidth = "100%";
+          imgExp.style.height = "auto";
+          imgExp.style.marginTop = "12px";
+          imgExp.style.border = "2px solid #ddd";
+          imgExp.style.borderRadius = "8px";
+          imgExp.style.display = "block";
+          imgExp.style.cursor = "pointer";
+          imgExp.title = "Clic para ampliar";
+          imgExp.onclick = function() { window.open(this.src, '_blank'); };
+          explicacionDiv.appendChild(imgExp);
+        }
+
+        div.appendChild(explicacionDiv);
+      }
+
+      cont.appendChild(div);
+    });
+
+    // Restaurar estado previo (selecciones y preguntas evaluadas)
+    restoreSelectionsAndGrades(seccionId);
+
+    // ── Modo tarjetita (OAV) ────────────────────────────────────────────
+    // Si script_onebyone.js está cargado, activar el modo una-pregunta-por-vez
+    // directamente aquí, sin polling ni race conditions.
+    if (typeof window._oavRenderOAV === 'function' && typeof window._oavState !== 'undefined') {
+      if (!window._oavState[seccionId]) {
+        window._oavState[seccionId] = { currentIdx: 0, total: preguntas.length };
+      }
+      window._oavRenderOAV(seccionId);
+
+
+    }
+    // ────────────────────────────────────────────────────────────────────
+    if (typeof _onReady === 'function') _onReady();
+  }
+
+  function persistSelectionsForQuestion(seccionId, qIndex) {
+    const name = `pregunta${seccionId}${qIndex}`;
+    const inputs = Array.from(document.getElementsByName(name));
+    const seleccionadas = inputs
+      .map((inp, i) => (inp.checked ? i : null))
+      .filter(v => v !== null);
+
+    if (!state[seccionId].answers) state[seccionId].answers = {};
+    state[seccionId].answers[qIndex] = seleccionadas;
+    saveJSON(STORAGE_KEY, state);
+  }
+
+  function responderPregunta(seccionId, qIndex) {
+    const preguntas = preguntasPorSeccion[seccionId];
+    const preg = preguntas[qIndex];
+
+    const name = `pregunta${seccionId}${qIndex}`;
+    const inputs = Array.from(document.getElementsByName(name));
+
+    const seleccionMixed = inputs
+      .map((inp, i) => (inp.checked ? i : null))
+      .filter(v => v !== null);
+
+    if (seleccionMixed.length === 0) {
+      alert("Por favor, selecciona al menos una opción antes de responder.");
+      return;
+    }
+
+    // Congelar las opciones de ESTA pregunta específica (si no está ya congelada)
+    if (!state[seccionId].shuffleMap[qIndex]) {
+      freezeShuffleForQuestion(seccionId, qIndex);
+    }
+    const mInv = state[seccionId].shuffleMap[qIndex];
+
+    const seleccionOriginal = seleccionMixed.map(i => mInv[i]).sort();
+    const correctaOriginal = preg.correcta.slice().sort();
+    const isCorrect = JSON.stringify(seleccionOriginal) === JSON.stringify(correctaOriginal);
+
+    const puntajeElem = document.getElementById(`puntaje-${seccionId}-${qIndex}`);
+    if (isCorrect) {
+      window.puntajesPorSeccion[seccionId][qIndex] = 1;
+      puntajeElem.textContent = "✅ Correcto (+1)";
+    } else {
+      window.puntajesPorSeccion[seccionId][qIndex] = 0;
+      puntajeElem.textContent = "❌ Incorrecto (0)";
+    }
+
+    const correctasMezcladas = correctaOriginal.map(ori =>
+      parseInt(Object.keys(mInv).find(k => mInv[k] === ori), 10)
+    );
+    correctasMezcladas.forEach(i => {
+      if (!isNaN(i) && inputs[i]) {
+        inputs[i].parentElement.style.backgroundColor = "#eafaf1";
+        inputs[i].parentElement.style.borderColor = "#1e7e34";
+      }
+    });
+    seleccionMixed.forEach(i => {
+      const ori = mInv[i];
+      if (!preg.correcta.includes(ori) && inputs[i]) {
+        inputs[i].parentElement.style.backgroundColor = "#fdecea";
+        inputs[i].parentElement.style.borderColor = "#c0392b";
+      }
+    });
+
+    inputs.forEach(inp => (inp.disabled = true));
+    const btn = inputs[0]?.closest(".pregunta")?.querySelector("button.btn-responder");
+    if (btn) btn.disabled = true;
+
+    persistSelectionsForQuestion(seccionId, qIndex);
+    state[seccionId].graded[qIndex] = true;
+    
+    // IMPORTANTE: Solo para cuestionarios NO-IAR, agregar a answeredOrder
+    const esIAR = seccionId.startsWith('iar') || seccionId.toLowerCase().includes('iar');
+    
+    if (!esIAR) {
+      // Para cuestionarios normales: agregar esta pregunta al orden de respondidas (si no está ya)
+      if (!state[seccionId].answeredOrder) {
+        state[seccionId].answeredOrder = [];
+      }
+      if (!state[seccionId].answeredOrder.includes(qIndex)) {
+        state[seccionId].answeredOrder.push(qIndex);
+        console.log('📌 Pregunta', qIndex, 'agregada a answeredOrder:', state[seccionId].answeredOrder);
+      }
+      
+      // Eliminar de unansweredOrder
+      if (state[seccionId].unansweredOrder) {
+        const indexInUnanswered = state[seccionId].unansweredOrder.indexOf(qIndex);
+        if (indexInUnanswered !== -1) {
+          state[seccionId].unansweredOrder.splice(indexInUnanswered, 1);
+          console.log('🗑️ Pregunta', qIndex, 'eliminada de unansweredOrder:', state[seccionId].unansweredOrder);
+        }
+      }
+    } else {
+      console.log('✅ IAR - Pregunta', qIndex, 'respondida sin cambiar orden de visualización');
+    }
+    
+    // Guardar el estado completo
+    saveJSON(STORAGE_KEY, state);
+    console.log('💾 Estado guardado');
+    
+    // Re-renderizar solo si NO es IAR (para reorganizar preguntas respondidas arriba)
+    if (!esIAR) {
+      generarCuestionario(seccionId);
+    }
+
+    // ===== Verificar si se respondió la ÚLTIMA pregunta y mostrar puntuación automáticamente =====
+    // Solo si OAV NO está activo (el OAV maneja su propio disparo vía _mostrarResultadoFinalOAV)
+    const oavActivo = typeof window._oavRenderOAV === 'function' && typeof window._oavState !== 'undefined';
+    if (!oavActivo) {
+      const todasRespondidas = preguntas.every((_, idx) =>
+        window.puntajesPorSeccion[seccionId]?.[idx] !== null &&
+        window.puntajesPorSeccion[seccionId]?.[idx] !== undefined
+      );
+      if (todasRespondidas && !state[seccionId]?.totalShown) {
+        setTimeout(() => mostrarResultadoFinal(seccionId), 300);
+      }
+    }
+  }
+
+  // ======== Mostrar resultado final ========
+  function mostrarResultadoFinal(seccionId) {
+    const preguntas = preguntasPorSeccion[seccionId] || [];
+    const resultNode = document.getElementById(`resultado-total-${seccionId}`);
+    // No hacer return si resultNode no existe o está oculto por OAV —
+    // la lógica de checkmark, attemptLog y Firestore debe ejecutarse siempre.
+
+    const totalScore = window.puntajesPorSeccion[seccionId].reduce((a, b) => a + (b || 0), 0);
+
+    state[seccionId].totalShown = true;
+    // Sincronizar también en localStorage (por si OAV escribió ahí directamente)
+    try {
+      const rawLS = localStorage.getItem(STORAGE_KEY);
+      const allLS = rawLS ? JSON.parse(rawLS) : {};
+      if (!allLS[seccionId]) allLS[seccionId] = {};
+      allLS[seccionId].totalShown = true;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(allLS));
+    } catch(e) {}
+    saveJSON(STORAGE_KEY, state);
+
+    // ======= AUTO-CHECKMARK: marcar el ☑ en el submenú al completar =======
+    (function autoMarcarCompletado(sid) {
+      var USER_KEY = 'iar_user_id_v1';
+      var COMPLETED_KEY_PREFIX = 'iar_completed_v1_';
+      try {
+        var uid = localStorage.getItem(USER_KEY);
+        if (!uid) return;
+        var completedKey = COMPLETED_KEY_PREFIX + uid;
+        var completed = {};
+        try { completed = JSON.parse(localStorage.getItem(completedKey) || '{}'); } catch(e) {}
+        if (!completed[sid]) {
+          completed[sid] = true;
+          localStorage.setItem(completedKey, JSON.stringify(completed));
+          // Guardar completados en Firestore
+          _guardarCompletadosFirestore(completed);
+          // Actualizar UI del checkbox si está visible
+          var allLis = document.querySelectorAll('li[onclick]');
+          allLis.forEach(function(li) {
+            var m = li.getAttribute('onclick').match(/mostrarCuestionario\('([^']+)'\)/);
+            if (m && m[1] === sid) {
+              li.classList.add('iar-completado');
+              var inp = li.querySelector('.iar-check-input');
+              if (inp) {
+                inp.checked = true;
+                var icon = li.querySelector('.iar-check-icon');
+                if (icon) icon.title = 'Completado — clic para desmarcar';
+              }
+              // Actualizar también los botones de la barra inferior
+              document.querySelectorAll('.nav-bar-btn[data-seccion="' + sid + '"]').forEach(function(btn) {
+                btn.classList.add('nav-bar-btn-completado');
+              });
+            }
+          });
+        }
+      } catch(e) {}
+    })(seccionId);
+    // ======= FIN AUTO-CHECKMARK =======
+
+    attemptLog.push({
+      sectionId: seccionId,
+      sectionTitle: getSectionTitle(seccionId),
+      iso: todayISO(),
+      score: totalScore,
+      total: preguntas.length
+    });
+    saveJSON(ATTEMPT_LOG_KEY, attemptLog);
+    // Guardar historial en Firestore
+    _guardarHistorialFirestore();
+
+    // Actualizar colores de la barra de navegación inferior
+    if (typeof renderNavBar === 'function') renderNavBar();
+  }
+  // Exponer en window para que script_onebyone.js (OAV) pueda disparar
+  // el registro del intento (attemptLog + Firestore) al mostrar el resultado.
+  window.mostrarResultadoFinal = mostrarResultadoFinal;
+
+
+  // ======== Reiniciar Examen ========
+  window.reiniciarExamen = function(seccionId) {
+    const s = state[seccionId];
+    const esIAR = seccionId.startsWith('iar') && seccionId !== 'simulacro_iar';
+
+    const titulo = '¿Reiniciar este examen?';
+    const mensaje = esIAR
+      ? '¿Estás seguro de que deseas reiniciar este examen?\n\nSe borrarán TODAS tus respuestas y la puntuación.\nLas opciones de cada pregunta se presentarán en un NUEVO orden aleatorio.\nEsta acción no se puede deshacer.'
+      : '¿Estás seguro de que deseas reiniciar este examen?\n\nSe borrarán TODAS tus respuestas y la puntuación.\nLas opciones de cada pregunta se presentarán en un NUEVO orden aleatorio.\nEsta acción no se puede deshacer.';
+
+    mostrarDialogoConfirmacion(
+      titulo,
+      mensaje,
+      function() {
+        // Ejecutar callback pendiente de OAV (limpia marcas/índice) si existe
+        if (typeof window._oavPendingReiniciarCallback === 'function') {
+          window._oavPendingReiniciarCallback();
+          window._oavPendingReiniciarCallback = null;
+        }
+        // Siempre aleatorizar opciones al reiniciar (aleatorizar=true)
+        // Para IAR conservamos el orden de PREGUNTAS pero aleatorizamos las OPCIONES
+        if (esIAR) {
+          // Borrar solo shuffleMap para aleatorizar opciones, pero mantener estructura IAR
+          const answeredOrderGuardado = s && s.answeredOrder ? s.answeredOrder.slice() : [];
+          const unansweredOrderGuardado = s && s.unansweredOrder ? s.unansweredOrder.slice() : [];
+          state[seccionId] = {
+            shuffleFrozen: false,
+            shuffleMap: {},          // vacío = se re-mezclará al regenerar
+            answeredOrder: [],
+            unansweredOrder: [...answeredOrderGuardado, ...unansweredOrderGuardado],
+            answers: {},
+            graded: {},
+            totalShown: false,
+            explanationShown: {}
+          };
+          saveJSON(STORAGE_KEY, state);
+          // Borrar en Firestore para evitar que se restaure el progreso viejo al volver
+          _borrarSeccionFirestore(seccionId);
+          if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionId]) {
+            window.puntajesPorSeccion[seccionId] = Array(
+              (preguntasPorSeccion[seccionId] || []).length
+            ).fill(null);
+          }
+          const resultadoTotal = document.getElementById(`resultado-total-${seccionId}`);
+          if (resultadoTotal) { resultadoTotal.innerHTML = ""; resultadoTotal.className = "resultado-final"; }
+        } else {
+          // Para no-IAR: limpiar todo y aleatorizar todo (preguntas + opciones)
+          // limpiarSeccion ya llama a _borrarSeccionFirestore internamente
+          limpiarSeccion(seccionId, true);
+        }
+
+        generarCuestionario(seccionId);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      },
+      function() {
+        // Si cancela, limpiar el callback pendiente de OAV para no dejarlo colgado
+        window._oavPendingReiniciarCallback = null;
+      },
+      { labelAceptar: '🔄 REINICIAR', labelCancelar: 'CANCELAR', colorAceptar: '#d97706' }
+    );
+  };
+
+  function hasAnySelection(seccionId, qIndex) {
+    const name = `pregunta${seccionId}${qIndex}`;
+    const inputs = Array.from(document.getElementsByName(name));
+    return inputs.some(inp => inp.checked);
+  }
+
+  // ======== Exponer showSection globalmente para el buscador ========
+  window.showSection = showSection;
+
+  // ======== Navegación carrusel entre cuestionarios IAR ========
+  const IAR_CARRUSEL = [
+    'iarsep2020','iaroct2020','iarnov2020','iardic2020',
+    'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
+    'iarmar2022','iarabr2022','iarjun2022','iarago2022','iaroct2022','iardic2022',
+    'iarmar2023','iarabr2023','iarmay2023','iarjun2023','iarago2023','iaroct2023','iardic2023',
+    'iarmar2024','iarabr2024','iarmay2024','iarjun2024','iarago2024','iarsep2024','iaroct2024','iarnov2024','iardic2024',
+    'iarfeb2025','iarmar2025','iarabr2025','iarjun2025','iarsep2025','iaroct2025','iarnov2025','iardic2025',
+    'iarfeb2026'
   ];
 
-  function _comNorm(t) {
-    return t.toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-      .replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+  // ── Helper: detectar si hay respuestas marcadas en la sección actual ──
+  // Lee siempre desde localStorage para capturar lo escrito por script_onebyone.js
+  function hayRespuestasMarcadas(seccionId) {
+    if (!seccionId) return false;
+    // Sincronizar state en memoria antes de evaluar
+    _sincronizarStateDesdeStorage(seccionId);
+    return _hayProgresoEnStorage(seccionId);
   }
 
-  // Moderación con coincidencia de palabras completas para evitar falsos positivos
-  function _comModerar(texto) {
-    if (!texto || !texto.trim()) return 'El comentario no puede estar vacío.';
-    const t = texto.trim();
-    if (t.length < 5)   return 'El comentario es demasiado corto (mínimo 5 caracteres).';
-    if (t.length > 800) return 'El comentario es demasiado largo (máximo 800 caracteres).';
-    const norm = _comNorm(t);
-    for (const p of _COM_PROHIBIDAS) {
-      const pn = _comNorm(p);
-      // Para frases cortas (una palabra), exigir límites de palabra para evitar
-      // falsos positivos en terminología médica compuesta.
-      const esMultipalabra = pn.includes(' ');
-      if (esMultipalabra) {
-        if (norm.includes(pn))
-          return '⚠️ Tu comentario contiene lenguaje inapropiado o enlaces no permitidos. Revisalo antes de publicar.';
-      } else {
-        // Verificar límite de palabra: el término no debe estar dentro de una palabra más larga
-        const re = new RegExp('(^|\\s)' + pn.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '(\\s|$)');
-        if (re.test(norm))
-          return '⚠️ Tu comentario contiene lenguaje inapropiado o enlaces no permitidos. Revisalo antes de publicar.';
-      }
+  // ── Diálogo de confirmación profesional para salir de un cuestionario en curso ──
+  function confirmarSalidaCuestionario(onConfirmar) {
+    if (!hayRespuestasMarcadas(currentSection)) {
+      onConfirmar();
+      return;
     }
-    if (/(.)\1{6,}/.test(t))
-      return '⚠️ El comentario parece contener texto repetitivo. Escribí un aporte válido.';
-    const soloLetras = t.replace(/[^a-zA-Z]/g,'');
-    if (soloLetras.length > 10 && soloLetras.replace(/[^A-Z]/g,'').length / soloLetras.length > 0.7)
-      return '⚠️ Por favor evitá escribir todo en MAYÚSCULAS.';
-    return null;
-  }
-
-  function _comFecha(ts) {
-    if (!ts) return '';
-    const date = ts.toDate ? ts.toDate() : ts.seconds ? new Date(ts.seconds * 1000) : new Date(ts);
-    if (isNaN(date.getTime())) return '';
-    const diff = Date.now() - date;
-    const min = Math.floor(diff / 60000), hr = Math.floor(diff / 3600000), day = Math.floor(diff / 86400000);
-    if (min < 1)  return 'Hace un momento';
-    if (min < 60) return `Hace ${min} min`;
-    if (hr  < 24) return `Hace ${hr} h`;
-    if (day < 7)  return `Hace ${day} día${day !== 1 ? 's' : ''}`;
-    return date.toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
-  }
-
-  function _comSanitize(str) {
-    if (typeof str !== 'string') return '';
-    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-              .replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'<br>');
-  }
-
-  function _comGetUser() {
-    const user   = window._authCurrentUser || null;
-    const esDemo = window._demoCheckEnabled === true;
-    const esAdmin = window._esAdmin === true;
-    let nombre = 'Usuario';
-    if (user) nombre = user.displayName || (user.email ? user.email.split('@')[0] : 'Usuario');
-    return { user, esDemo, esAdmin, nombre, uid: user ? user.uid : null };
-  }
-
-  // ── Leer configuración de pausa desde Firestore ──────────────────
-  async function _comLeerPausa() {
-    try {
-      const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-      const db = window._firestoreDB_comentarios;
-      if (!db) return {};
-      const snap = await getDoc(doc(db, 'config', 'comentarios_pausa'));
-      return snap.exists() ? snap.data() : {};
-    } catch(e) {
-      console.warn('[IAR Comentarios] No se pudo leer config de pausa:', e);
-      return {};
-    }
-  }
-
-  // ── Escribir configuración de pausa en Firestore ─────────────────
-  async function _comEscribirPausa(campos) {
-    const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-    const db = window._firestoreDB_comentarios;
-    if (!db) throw new Error('sin db');
-    const ref = doc(db, 'config', 'comentarios_pausa');
-    // Leer estado actual y fusionar
-    let actual = {};
-    try { const s = await getDoc(ref); if (s.exists()) actual = s.data(); } catch(e) {}
-    // Fusión profunda para campos anidados
-    const nuevo = Object.assign({}, actual);
-    for (const [k, v] of Object.entries(campos)) {
-      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-        nuevo[k] = Object.assign({}, actual[k] || {}, v);
-      } else {
-        nuevo[k] = v;
-      }
-    }
-    await setDoc(ref, nuevo);
-    return nuevo;
-  }
-
-  // ── Verificar si los comentarios están pausados para una clave ───
-  function _comEstaPausado(pausa, seccionId, clave) {
-    if (!pausa) return false;
-    if (pausa.global === true) return 'global';
-    if (pausa.cuestionarios && pausa.cuestionarios[seccionId] === true) return 'cuestionario';
-    if (pausa.preguntas && pausa.preguntas[clave] === true) return 'pregunta';
-    return false;
-  }
-
-  // ── Renderizar la sección de comentarios para una pregunta ───────
-  async function _comRender(seccionId, preguntaIdx) {
-    const wrapperId = 'oav-wrapper-' + seccionId;
-    const wrapper = document.getElementById(wrapperId);
-    if (!wrapper) return;
-
-    const clave = seccionId + '_' + preguntaIdx;
-    const containerId = 'iar-com-' + clave;
-
-    let cont = document.getElementById(containerId);
-    if (!cont) {
-      cont = document.createElement('div');
-      cont.id = containerId;
-      wrapper.appendChild(cont);
-    } else {
-      cont.innerHTML = '';
-    }
-
-    const { esDemo, esAdmin, nombre, uid } = _comGetUser();
-    if (!uid) return; // no autenticado: no mostrar nada
-
-    // Leer estado de pausa
-    const pausa = await _comLeerPausa();
-    const motivoPausa = _comEstaPausado(pausa, seccionId, clave);
-
-    cont.className = 'iar-comentarios';
-    cont.innerHTML = `
-      <div class="iar-com-titulo">
-        💬 Comentarios de la comunidad
-        <span class="badge" id="iar-badge-${clave}">…</span>
-      </div>
-      <div id="iar-admintb-${clave}"></div>
-      <div class="iar-skeleton" id="iar-sk-${clave}">
-        <div class="iar-skeleton-item"></div>
-        <div class="iar-skeleton-item short"></div>
-      </div>
-      <div class="iar-com-lista" id="iar-lista-${clave}" style="display:none"></div>
-      <div id="iar-formarea-${clave}"></div>
-    `;
-
-    // ── Toolbar de admin ─────────────────────────────────────────
-    if (esAdmin) {
-      _comRenderAdminToolbar(cont, clave, seccionId, pausa, uid, nombre);
-    }
-
-    // ── Área del formulario ──────────────────────────────────────
-    const formArea = cont.querySelector('#iar-formarea-' + clave);
-    if (esDemo) {
-      formArea.innerHTML = `
-        <div class="iar-com-demo">
-          🔒 Los comentarios están disponibles para usuarios con acceso completo.
-        </div>`;
-    } else if (motivoPausa) {
-      const msgs = {
-        global:       '⏸️ Los comentarios están temporalmente suspendidos en toda la plataforma.',
-        cuestionario: '⏸️ Los comentarios están suspendidos en este cuestionario.',
-        pregunta:     '⏸️ Los comentarios están suspendidos para esta pregunta.',
-      };
-      formArea.innerHTML = `<div class="iar-com-pausado">${msgs[motivoPausa] || msgs.global}</div>`;
-    } else {
-      formArea.innerHTML = `
-        <div class="iar-com-form" id="iar-form-${clave}">
-          <textarea class="iar-com-ta" id="iar-ta-${clave}"
-            placeholder="Dejá tu comentario, duda o aporte sobre esta pregunta…"
-            maxlength="800"></textarea>
-          <div class="iar-com-err" id="iar-err-${clave}"></div>
-          <div class="iar-com-ok"  id="iar-ok-${clave}">✅ Comentario publicado.</div>
-          <div class="iar-com-footer">
-            <span class="iar-com-cc" id="iar-cc-${clave}">0 / 800</span>
-            <button class="iar-com-btn" id="iar-btn-${clave}">✉️ Publicar</button>
-          </div>
-        </div>`;
-
-      const ta  = cont.querySelector('#iar-ta-'  + clave);
-      const cc  = cont.querySelector('#iar-cc-'  + clave);
-      const btn = cont.querySelector('#iar-btn-' + clave);
-
-      ta.addEventListener('input', () => {
-        const len = ta.value.length;
-        cc.textContent = len + ' / 800';
-        cc.className = 'iar-com-cc' + (len > 780 ? ' maximo' : len > 700 ? ' cerca' : '');
-      });
-
-      btn.addEventListener('click', () => _comEnviar(clave, seccionId, preguntaIdx, cont, uid, nombre, esAdmin));
-    }
-
-    await _comCargar(clave, cont, uid, esAdmin);
-  }
-
-  // ── Renderizar barra de herramientas para admin ──────────────────
-  function _comRenderAdminToolbar(cont, clave, seccionId, pausa, uid, nombre) {
-    const tbEl = cont.querySelector('#iar-admintb-' + clave);
-    if (!tbEl) return;
-
-    const pausaPreg   = !!(pausa.preguntas    && pausa.preguntas[clave]);
-    const pausaCuest  = !!(pausa.cuestionarios && pausa.cuestionarios[seccionId]);
-    const pausaGlobal = !!pausa.global;
-
-    tbEl.innerHTML = `
-      <div class="iar-admin-toolbar">
-        <span class="iar-admin-toolbar-label">🔧 Admin</span>
-        <button class="iar-admin-btn borrar-todos"  id="iar-adm-borrar-${clave}"  title="Borra todos los comentarios de esta pregunta">🗑️ Borrar todos</button>
-        <button class="iar-admin-btn pausar-preg  ${pausaPreg   ? 'activo' : ''}" id="iar-adm-ppre-${clave}"   title="Pausar/reanudar comentarios de esta pregunta">${pausaPreg   ? '▶️ Reanudar pregunta'  : '⏸️ Pausar pregunta'}</button>
-        <button class="iar-admin-btn pausar-cuest ${pausaCuest  ? 'activo' : ''}" id="iar-adm-pcue-${clave}"   title="Pausar/reanudar comentarios de todo el cuestionario">${pausaCuest  ? '▶️ Reanudar cuestionario' : '⏸️ Pausar cuestionario'}</button>
-        <button class="iar-admin-btn pausar-global ${pausaGlobal ? 'activo' : ''}" id="iar-adm-pglo-${clave}"  title="Pausar/reanudar todos los comentarios de la plataforma">${pausaGlobal ? '▶️ Reanudar todo' : '⏸️ Pausar todo'}</button>
-      </div>`;
-
-    // Borrar todos los comentarios de esta pregunta
-    tbEl.querySelector('#iar-adm-borrar-' + clave).addEventListener('click', async () => {
-      if (!confirm('¿Borrar TODOS los comentarios de esta pregunta? Esta acción no se puede deshacer.')) return;
-      await _comBorrarTodos(clave, cont);
-    });
-
-    // Pausar/reanudar esta pregunta
-    tbEl.querySelector('#iar-adm-ppre-' + clave).addEventListener('click', async () => {
-      const nuevoVal = !pausaPreg;
-      try {
-        const nuevoEstado = await _comEscribirPausa({ preguntas: { [clave]: nuevoVal } });
-        // Refrescar la vista completa
-        const partes = clave.split('_');
-        const idx = parseInt(partes[partes.length - 1]);
-        const sid = partes.slice(0, partes.length - 1).join('_');
-        await _comRender(sid, idx);
-      } catch(e) { alert('No se pudo cambiar el estado. Intentá de nuevo.'); }
-    });
-
-    // Pausar/reanudar cuestionario completo
-    tbEl.querySelector('#iar-adm-pcue-' + clave).addEventListener('click', async () => {
-      const nuevoVal = !pausaCuest;
-      const accion = nuevoVal ? 'pausar' : 'reanudar';
-      if (!confirm(`¿${accion.charAt(0).toUpperCase()+accion.slice(1)} los comentarios de TODO el cuestionario "${seccionId}"?`)) return;
-      try {
-        await _comEscribirPausa({ cuestionarios: { [seccionId]: nuevoVal } });
-        const partes = clave.split('_');
-        const idx = parseInt(partes[partes.length - 1]);
-        const sid = partes.slice(0, partes.length - 1).join('_');
-        await _comRender(sid, idx);
-      } catch(e) { alert('No se pudo cambiar el estado. Intentá de nuevo.'); }
-    });
-
-    // Pausar/reanudar todos los comentarios globalmente
-    tbEl.querySelector('#iar-adm-pglo-' + clave).addEventListener('click', async () => {
-      const nuevoVal = !pausaGlobal;
-      const accion = nuevoVal ? 'pausar' : 'reanudar';
-      if (!confirm(`¿${accion.charAt(0).toUpperCase()+accion.slice(1)} los comentarios en TODA la plataforma?`)) return;
-      try {
-        await _comEscribirPausa({ global: nuevoVal });
-        const partes = clave.split('_');
-        const idx = parseInt(partes[partes.length - 1]);
-        const sid = partes.slice(0, partes.length - 1).join('_');
-        await _comRender(sid, idx);
-      } catch(e) { alert('No se pudo cambiar el estado. Intentá de nuevo.'); }
-    });
-  }
-
-  // ── Borrar TODOS los comentarios de una pregunta (solo admin) ────
-  async function _comBorrarTodos(clave, cont) {
-    try {
-      const { collection, getDocs, doc, deleteDoc, writeBatch } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-      const db = window._firestoreDB_comentarios;
-      if (!db) throw new Error('sin db');
-      const snap = await getDocs(collection(db, 'comentarios', clave, 'mensajes'));
-      if (snap.empty) {
-        alert('No hay comentarios para borrar en esta pregunta.');
+    // Mensaje especial para Simulacro IAR: advertir que el progreso se pierde
+    if (currentSection === 'simulacro_iar') {
+      var simState = null;
+      try { var _raw = localStorage.getItem('quiz_state_v3'); if (_raw) simState = JSON.parse(_raw)['simulacro_iar']; } catch(e) {}
+      var simCompleto = simState && simState.totalShown;
+      if (!simCompleto) {
+        mostrarDialogoNavBar(
+          '⚠️ Vas a salir del Simulacro IAR',
+          '⛔ Las respuestas marcadas NO se guardarán.\n\nSi salís ahora, el progreso de este simulacro se perderá. La próxima vez que entres se generará un nuevo set de 20 preguntas.\n\n¿Querés salir de todas formas?',
+          '✅ Sí, salir (perder progreso)',
+          '↩️ No, seguir respondiendo',
+          onConfirmar
+        );
         return;
       }
-      const batch = writeBatch(db);
-      snap.forEach(d => batch.delete(doc(db, 'comentarios', clave, 'mensajes', d.id)));
-      await batch.commit();
-      const lista = cont.querySelector('#iar-lista-' + clave);
-      const badge = cont.querySelector('#iar-badge-' + clave);
-      if (lista) lista.innerHTML = '<div class="iar-com-vacio">Todavía no hay comentarios. ¡Sé el primero!</div>';
-      if (badge) badge.textContent = '0';
-    } catch(e) {
-      console.warn('[IAR Comentarios] Error al borrar todos:', e);
-      alert('No se pudieron borrar los comentarios. Intentá de nuevo.');
     }
+    mostrarDialogoNavBar(
+      '⚠️ Tenés respuestas marcadas',
+      'Si salís ahora, tu progreso en este cuestionario se conservará tal como está.\n\n¿Querés continuar de todas formas?',
+      '✅ Sí, salir',
+      '↩️ No, seguir respondiendo',
+      onConfirmar
+    );
   }
 
-  // ── Cargar comentarios desde Firestore ───────────────────────────
-  async function _comCargar(clave, cont, uid, esAdmin) {
-    const sk    = cont.querySelector('#iar-sk-'    + clave);
-    const lista = cont.querySelector('#iar-lista-' + clave);
-    const badge = cont.querySelector('#iar-badge-' + clave);
-
-    try {
-      const { collection, query, orderBy, limit, getDocs } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-
-      const db = window._firestoreDB_comentarios;
-      if (!db) throw new Error('sin db');
-
-      const q = query(
-        collection(db, 'comentarios', clave, 'mensajes'),
-        orderBy('timestamp', 'asc'),
-        limit(50)
-      );
-      const snap = await getDocs(q);
-
-      if (sk)    sk.style.display    = 'none';
-      if (lista) lista.style.display = 'flex';
-
-      const docs = [];
-      snap.forEach(d => docs.push({ id: d.id, ...d.data() }));
-
-      if (badge) badge.textContent = docs.length;
-
-      if (!docs.length) {
-        lista.innerHTML = '<div class="iar-com-vacio">Todavía no hay comentarios. ¡Sé el primero!</div>';
-        return;
-      }
-
-      lista.innerHTML = '';
-      docs.forEach(c => lista.appendChild(_comItemDOM(c, clave, uid, esAdmin)));
-      lista.scrollTop = lista.scrollHeight;
-
-    } catch (e) {
-      console.warn('[IAR Comentarios] Error al cargar:', e);
-      if (sk)    sk.style.display    = 'none';
-      if (lista) {
-        lista.style.display = 'flex';
-        lista.innerHTML = '<div class="iar-com-vacio">⚠️ No se pudieron cargar los comentarios.</div>';
-      }
+  window.navegarCuestionarioIAR = function(seccionActual, direccion) {
+    var idx = IAR_CARRUSEL.indexOf(seccionActual);
+    if (idx === -1) return;
+    var nuevoIdx = (idx + direccion + IAR_CARRUSEL.length) % IAR_CARRUSEL.length;
+    var destino = IAR_CARRUSEL[nuevoIdx];
+    // Bloqueo demo: si el destino no está permitido, mostrar modal
+    if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
+        !window._demoSeccionesPermitidas.includes(destino)) {
+      if (window.mostrarModalRestriccionDemo) window.mostrarModalRestriccionDemo();
+      else if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
+      return;
     }
-  }
+    confirmarSalidaCuestionario(function() {
+      window.mostrarCuestionario(destino);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  };
 
-  // ── Crear elemento DOM de un comentario ─────────────────────────
-  function _comItemDOM(c, clave, uid, esAdmin) {
-    const ADMIN_EMAIL = 'admin.14r@gmail.com';
-    const esAutorAdmin = c.email === ADMIN_EMAIL;
-    const esPropioComentario = c.uid === uid;
-    const puedeEliminar = esAdmin || esPropioComentario;
-
-    const div = document.createElement('div');
-    div.className = 'iar-com-item' + (esAutorAdmin ? ' es-admin' : '');
-    div.dataset.id = c.id;
-    div.innerHTML = `
-      <div class="iar-com-meta">
-        <span class="iar-com-autor ${esAutorAdmin ? 'admin-tag' : ''}">${_comSanitize(c.nombre || 'Usuario')}</span>
-        <span class="iar-com-fecha">${_comFecha(c.timestamp)}</span>
-      </div>
-      <div class="iar-com-texto">${_comSanitize(c.texto)}</div>
-      ${puedeEliminar ? '<button class="iar-com-del" title="Eliminar comentario">🗑️</button>' : ''}
-    `;
-    if (puedeEliminar) {
-      div.querySelector('.iar-com-del').addEventListener('click', () => _comEliminar(c.id, clave, div));
+  // ── Carrusel para Ver Respuestas Correctas ──
+  let _respuestasSeccionActual = '';
+  window.navegarRespuestasIAR = function(seccionActual, direccion) {
+    // Intentar obtener la sección actual de múltiples fuentes
+    var sid = seccionActual
+      || _respuestasSeccionActual
+      || (document.getElementById('contenido-respuestas-examen') && document.getElementById('contenido-respuestas-examen').dataset.seccion)
+      || '';
+    var idx = IAR_CARRUSEL.indexOf(sid);
+    if (idx === -1) {
+      idx = 0;
     }
-    return div;
-  }
-
-  // ── Enviar comentario ────────────────────────────────────────────
-  async function _comEnviar(clave, seccionId, preguntaIdx, cont, uid, nombre, esAdmin) {
-    const ta  = cont.querySelector('#iar-ta-'  + clave);
-    const err = cont.querySelector('#iar-err-' + clave);
-    const ok  = cont.querySelector('#iar-ok-'  + clave);
-    const btn = cont.querySelector('#iar-btn-' + clave);
-    if (!ta || !err || !ok || !btn) return;
-
-    const texto = ta.value.trim();
-    err.style.display = 'none';
-    ok.style.display  = 'none';
-
-    // El admin no está sujeto a moderación automática
-    if (!esAdmin) {
-      const errorMod = _comModerar(texto);
-      if (errorMod) {
-        err.textContent = errorMod;
-        err.style.display = 'block';
-        ta.focus();
-        return;
-      }
-    } else {
-      // Validaciones mínimas para admin
-      if (!texto) { err.textContent = 'El comentario no puede estar vacío.'; err.style.display = 'block'; return; }
-      if (texto.length > 800) { err.textContent = 'Máximo 800 caracteres.'; err.style.display = 'block'; return; }
+    var nuevoIdx = (idx + direccion + IAR_CARRUSEL.length) % IAR_CARRUSEL.length;
+    var destino = IAR_CARRUSEL[nuevoIdx];
+    // ── BLOQUEO DEMO ──
+    if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
+        !window._demoSeccionesPermitidas.includes(destino)) {
+      if (window.mostrarModalRestriccionDemo) window.mostrarModalRestriccionDemo();
+      else if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
+      return;
     }
+    window.mostrarRespuestasExamen(destino);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
-    btn.disabled = true;
-    btn.innerHTML = '⏳ Publicando…';
+  // Variable para rastrear el origen de navegación hacia un cuestionario
+  let navegacionOrigen = null; // 'buscador' | 'submenu' | null
 
-    try {
-      const { collection, addDoc, serverTimestamp } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+  // ======== Navegación (mostrar/ocultar páginas) ========
+  window.mostrarCuestionario = function (seccionId) {
+    // Cuando se llama desde el menú/submenú, el origen es 'submenu'
+    navegacionOrigen = 'submenu';
+    saveScrollPosition();
+    saveLastSection(seccionId);  // Guardar para volver al ítem correcto al regresar
+    history.pushState({ section: seccionId, origen: 'submenu' }, `Cuestionario ${seccionId}`, `#${seccionId}`);
+    showSection(seccionId);
+  };
 
-      const db   = window._firestoreDB_comentarios;
-      const user = window._authCurrentUser;
-      if (!db) throw new Error('sin db');
-
-      await addDoc(collection(db, 'comentarios', clave, 'mensajes'), {
-        uid,
-        nombre,
-        email: (user && user.email) || '',
-        texto,
-        timestamp: serverTimestamp(),
-        seccionId,
-        preguntaIdx,
-      });
-
-      ta.value = '';
-      const cc = cont.querySelector('#iar-cc-' + clave);
-      if (cc) { cc.textContent = '0 / 800'; cc.className = 'iar-com-cc'; }
-
-      ok.style.display = 'block';
-      setTimeout(() => { ok.style.display = 'none'; }, 3500);
-
-      await _comCargar(clave, cont, uid, esAdmin);
-
-    } catch (e) {
-      console.warn('[IAR Comentarios] Error al enviar:', e);
-      err.textContent = '⚠️ No se pudo publicar. Verificá tu conexión e intentá de nuevo.';
-      err.style.display = 'block';
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = '✉️ Publicar';
+  window.mostrarSubmenu = function (submenuId) {
+    saveScrollPosition();
+    saveLastSection(submenuId);  // Al volver al menú principal, resaltar el ítem del submenú
+    // Ocultar botón flotante de progreso en submenús
+    const _btnF = document.getElementById("btn-ver-progreso");
+    if (_btnF) _btnF.style.display = "none";
+    const _panF = document.getElementById("panel-progreso");
+    if (_panF) _panF.style.display = "none";
+    // Ocultar el menú principal
+    document.getElementById("menu-principal")?.classList.add("oculto");
+    // Ocultar todos los submenús y cuestionarios
+    document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+    document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
+    // Mostrar el submenú específico
+    const submenu = document.getElementById(submenuId);
+    if (submenu) {
+      submenu.style.display = "block";
     }
-  }
+    // Modo normal para la barra inferior del submenú
+    navBarModo = 'normal';
+    renderNavBar();
+    // Agregar al historial del navegador para que "atrás" vuelva al menú principal
+    history.pushState({ submenu: submenuId }, submenuId, `#${submenuId}`);
+    window.scrollTo(0, 0);
+  };
 
-  // ── Eliminar comentario individual ───────────────────────────────
-  async function _comEliminar(docId, clave, divEl) {
-    if (!confirm('¿Eliminar este comentario?')) return;
-    divEl.style.opacity = '0.4';
-    divEl.style.pointerEvents = 'none';
-    try {
-      const { doc, deleteDoc } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-      const db = window._firestoreDB_comentarios;
-      if (!db) throw new Error('sin db');
-      await deleteDoc(doc(db, 'comentarios', clave, 'mensajes', docId));
-      divEl.remove();
-      const cont = divEl.closest ? divEl.closest('.iar-comentarios') : null;
-      if (cont) {
-        const lista = cont.querySelector('[id^="iar-lista-"]');
-        const badge = cont.querySelector('[id^="iar-badge-"]');
-        if (lista && badge) {
-          const n = lista.querySelectorAll('.iar-com-item').length;
-          badge.textContent = n;
-          if (n === 0) lista.innerHTML = '<div class="iar-com-vacio">Todavía no hay comentarios. ¡Sé el primero!</div>';
+  window.volverAlSubmenu = function(submenuId) {
+    // Siempre va al submenú indicado — el buscador tiene su propio botón flotante
+    // Confirmación si hay respuestas en curso
+    if (hayRespuestasMarcadas(currentSection)) {
+      // Mensaje especial para Simulacro IAR: advertir que el progreso se pierde
+      if (currentSection === 'simulacro_iar') {
+        var _simSt = null;
+        try { var _rr = localStorage.getItem('quiz_state_v3'); if (_rr) _simSt = JSON.parse(_rr)['simulacro_iar']; } catch(e) {}
+        if (!(_simSt && _simSt.totalShown)) {
+          mostrarDialogoNavBar(
+            '⚠️ Vas a salir del Simulacro IAR',
+            '⛔ Las respuestas marcadas NO se guardarán.\n\nSi salís ahora, el progreso de este simulacro se perderá. La próxima vez que entres se generará un nuevo set de 20 preguntas.\n\n¿Querés salir de todas formas?',
+            '✅ Sí, salir (perder progreso)',
+            '↩️ No, seguir respondiendo',
+            function() { _ejecutarVolverAlSubmenu(submenuId); }
+          );
+          return;
         }
       }
-    } catch (e) {
-      console.warn('[IAR Comentarios] Error al eliminar:', e);
-      divEl.style.opacity = '1';
-      divEl.style.pointerEvents = '';
-      alert('No se pudo eliminar el comentario. Intentá de nuevo.');
+      mostrarDialogoNavBar(
+        '📋 ¿Salir del cuestionario?',
+        'Tenés respuestas marcadas en el cuestionario actual.\n\nTu progreso se conservará si volvés más tarde. ¿Querés salir de todas formas?',
+        '✅ Sí, volver al menú',
+        '↩️ No, seguir respondiendo',
+        function() { _ejecutarVolverAlSubmenu(submenuId); }
+      );
+      return;
+    }
+    _ejecutarVolverAlSubmenu(submenuId);
+  };
+
+  function _ejecutarVolverAlSubmenu(submenuId) {
+    // Simulacro IAR: al salir al submenú SIEMPRE limpiar el progreso (no se guarda)
+    // Excepción: si ya completó el cuestionario (totalShown), no limpiar
+    if (currentSection === 'simulacro_iar') {
+      var _simStateRaw2 = null;
+      try { _simStateRaw2 = JSON.parse(localStorage.getItem('quiz_state_v3') || '{}')['simulacro_iar']; } catch(e) {}
+      var _simCompleto2 = _simStateRaw2 && _simStateRaw2.totalShown;
+      if (!_simCompleto2) {
+        _limpiarSimulacroIARSinProgreso();
+      }
+    } else if (currentSection && state[currentSection] && state[currentSection].totalShown) {
+      limpiarSeccion(currentSection, true);
+    } else if (currentSection) {
+      // Para secciones normales: leer progreso desde localStorage
+      if (!_hayProgresoEnStorage(currentSection)) {
+        limpiarSeccion(currentSection, true);
+      } else {
+        _sincronizarStateDesdeStorage(currentSection);
+        _persistirIndiceOAVActual(currentSection);
+      }
+    }
+
+    const seccionOrigen = currentSection;
+    currentSection = null;
+    document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
+
+    document.getElementById("menu-principal")?.classList.add("oculto");
+    document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+    const submenu = document.getElementById(submenuId);
+    if (submenu) submenu.style.display = "block";
+    history.pushState({ submenu: submenuId }, submenuId, `#${submenuId}`);
+
+    setTimeout(() => scrollToSectionItem(seccionOrigen), 50);
+  };
+
+  window.volverAlMenu = function () {
+    confirmarSalidaCuestionario(function() {
+      if (currentSection !== null) {
+        history.pushState({ section: null }, 'Menú Principal', '#menu');
+      }
+      document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+      const _prc = document.getElementById('panel-respuestas-correctas');
+      if (_prc) _prc.classList.add('oculto');
+      const _pre2 = document.getElementById('pagina-respuestas-examen');
+      if (_pre2) _pre2.classList.remove('activa');
+      navBarModo = 'normal';
+      showMenu();
+    });
+  };
+
+  // ======== VER RESPUESTAS CORRECTAS ========
+  const EXAMENES_IAR_ORDEN = [
+    { id: 'iarsep2020', label: 'SEP 2020' }, { id: 'iaroct2020', label: 'OCT 2020' },
+    { id: 'iarnov2020', label: 'NOV 2020' }, { id: 'iardic2020', label: 'DIC 2020' },
+    { id: 'iarfeb2021', label: 'FEB 2021' }, { id: 'iarmar2021', label: 'MAR 2021' },
+    { id: 'iarabr2021', label: 'ABR 2021' }, { id: 'iarmay2021', label: 'MAY 2021' },
+    { id: 'iarjun2021', label: 'JUN 2021' }, { id: 'iarago2021', label: 'AGO 2021' },
+    { id: 'iarsep2021', label: 'SEP 2021' }, { id: 'iarnov2021', label: 'NOV 2021' },
+    { id: 'iardic2021', label: 'DIC 2021' },
+    { id: 'iarmar2022', label: 'MAR 2022' }, { id: 'iarabr2022', label: 'ABR 2022' },
+    { id: 'iarjun2022', label: 'JUN 2022' }, { id: 'iarago2022', label: 'AGO 2022' },
+    { id: 'iaroct2022', label: 'OCT 2022' }, { id: 'iardic2022', label: 'DIC 2022' },
+    { id: 'iarmar2023', label: 'MAR 2023' }, { id: 'iarabr2023', label: 'ABR 2023' },
+    { id: 'iarmay2023', label: 'MAY 2023' }, { id: 'iarjun2023', label: 'JUN 2023' },
+    { id: 'iarago2023', label: 'AGO 2023' }, { id: 'iaroct2023', label: 'OCT 2023' },
+    { id: 'iardic2023', label: 'DIC 2023' },
+    { id: 'iarmar2024', label: 'MAR 2024' },
+    { id: 'iarabr2024', label: 'ABR 2024' }, { id: 'iarmay2024', label: 'MAY 2024' },
+    { id: 'iarjun2024', label: 'JUN 2024' }, { id: 'iarago2024', label: 'AGO 2024' },
+    { id: 'iarsep2024', label: 'SEP 2024' }, { id: 'iaroct2024', label: 'OCT 2024' },
+    { id: 'iarnov2024', label: 'NOV 2024' }, { id: 'iardic2024', label: 'DIC 2024' },
+    { id: 'iarfeb2025', label: 'FEB 2025' }, { id: 'iarmar2025', label: 'MAR 2025' },
+    { id: 'iarabr2025', label: 'ABR 2025' },
+    { id: 'iarjun2025', label: 'JUN 2025' },
+    { id: 'iarsep2025', label: 'SEP 2025' }, { id: 'iaroct2025', label: 'OCT 2025' },
+    { id: 'iarnov2025', label: 'NOV 2025' }, { id: 'iardic2025', label: 'DIC 2025' },
+    { id: 'iarfeb2026', label: 'FEB 2026' },
+  ];
+
+  window.mostrarRespuestasCorrectas = function() {
+    // ── BLOQUEO: solo admin puede acceder ──
+    if (!window._esAdmin) return;
+    // ── BLOQUEO DEMO: permite entrar al panel pero cada examen individual queda bloqueado ──
+    // (el bloqueo por examen se hace en mostrarRespuestasExamen)
+    // Ocultar botón flotante de progreso
+    const _btnFR = document.getElementById("btn-ver-progreso");
+    if (_btnFR) _btnFR.style.display = "none";
+    const _panFR = document.getElementById("panel-progreso");
+    if (_panFR) _panFR.style.display = "none";
+    // Ocultar todo lo demás
+    document.getElementById('menu-principal')?.classList.add('oculto');
+    document.querySelectorAll('.menu-principal[id$="-submenu"]').forEach(s => s.style.display = 'none');
+    document.querySelectorAll('.pagina-cuestionario').forEach(p => p.classList.remove('activa'));
+    const _pb = document.getElementById('buscador-preguntas');
+    if (_pb) _pb.classList.add('oculto');
+    const _pre = document.getElementById('pagina-respuestas-examen');
+    if (_pre) _pre.classList.remove('activa');
+
+    const panel = document.getElementById('panel-respuestas-correctas');
+    if (!panel) return;
+    panel.classList.remove('oculto');
+
+    // Modo respuestas para la barra inferior
+    navBarModo = 'respuestas';
+    renderNavBar();
+
+    history.pushState({ respuestas: true }, 'Respuestas Correctas', '#respuestas');
+    window.scrollTo(0, 0);
+  };
+
+  window.mostrarRespuestasExamen = function(seccionId) {
+    // ── BLOQUEO: solo admin puede acceder ──
+    if (!window._esAdmin) return;
+    // ── BLOQUEO DEMO ──
+    if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
+        !window._demoSeccionesPermitidas.includes(seccionId)) {
+      if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
+      return;
+    }
+    _respuestasSeccionActual = seccionId; // guardar para carrusel
+    // Ocultar submenú de respuestas
+    const panel = document.getElementById('panel-respuestas-correctas');
+    if (panel) panel.classList.add('oculto');
+
+    // Ocultar otras páginas
+    document.querySelectorAll('.pagina-cuestionario').forEach(p => p.classList.remove('activa'));
+
+    // Modo respuestas para la barra inferior
+    navBarModo = 'respuestas';
+    renderNavBar();
+
+    // Preparar página individual
+    const pagina = document.getElementById('pagina-respuestas-examen');
+    if (!pagina) return;
+
+    // Título
+    const NOMBRES = {
+      iarsep2020:'SEP 2020',iaroct2020:'OCT 2020',iarnov2020:'NOV 2020',iardic2020:'DIC 2020',
+      iarfeb2021:'FEB 2021',iarmar2021:'MAR 2021',iarabr2021:'ABR 2021',iarmay2021:'MAY 2021',
+      iarjun2021:'JUN 2021',iarago2021:'AGO 2021',iarsep2021:'SEP 2021',iarnov2021:'NOV 2021',iardic2021:'DIC 2021',
+      iarmar2022:'MAR 2022',iarabr2022:'ABR 2022',iarjun2022:'JUN 2022',iarago2022:'AGO 2022',
+      iaroct2022:'OCT 2022',iardic2022:'DIC 2022',
+      iarmar2023:'MAR 2023',iarabr2023:'ABR 2023',iarmay2023:'MAY 2023',iarjun2023:'JUN 2023',
+      iarago2023:'AGO 2023',iaroct2023:'OCT 2023',iardic2023:'DIC 2023',
+      iarmar2024:'MAR 2024',iarabr2024:'ABR 2024',iarmay2024:'MAY 2024',
+      iarjun2024:'JUN 2024',iarago2024:'AGO 2024',iarsep2024:'SEP 2024',iaroct2024:'OCT 2024',
+      iarnov2024:'NOV 2024',iardic2024:'DIC 2024',
+      iarfeb2025:'FEB 2025',iarmar2025:'MAR 2025',iarabr2025:'ABR 2025',
+      iarjun2025:'JUN 2025',iarsep2025:'SEP 2025',iaroct2025:'OCT 2025',
+      iarnov2025:'NOV 2025',iardic2025:'DIC 2025',
+      iarfeb2026:'FEB 2026'
+    };
+
+    const titulo = document.getElementById('titulo-respuestas-examen');
+    if (titulo) titulo.textContent = '📋 RESPUESTAS CORRECTAS — IAR ' + (NOMBRES[seccionId] || seccionId.toUpperCase());
+
+    // Renderizar contenido
+    const cont = document.getElementById('contenido-respuestas-examen');
+    if (cont) {
+      // Solo re-renderizar si cambió el examen
+      if (cont.dataset.seccion !== seccionId) {
+        _renderRespuestasExamen(cont, seccionId);
+        cont.dataset.seccion = seccionId;
+      }
+    }
+
+    pagina.classList.add('activa');
+    history.pushState({ respuestasExamen: seccionId }, 'Respuestas ' + seccionId, '#respuestas-' + seccionId);
+    window.scrollTo(0, 0);
+  };
+
+  window.volverAlSubmenuRespuestas = function() {
+    const pagina = document.getElementById('pagina-respuestas-examen');
+    if (pagina) pagina.classList.remove('activa');
+    mostrarRespuestasCorrectas();
+  };
+
+  function _renderRespuestasExamen(cont, seccionId) {
+    cont.innerHTML = '';
+    const preguntas = preguntasPorSeccion[seccionId];
+
+    if (preguntas && preguntas.length > 0) {
+      _renderRespuestasExamenContenido(cont, preguntas);
+      return;
+    }
+
+    // No están en memoria — usar polling igual que showSection
+    cont.innerHTML = '<p style="text-align:center;color:#64748b;padding:40px;">⏳ Cargando preguntas...</p>';
+
+    function _intentarCargar(intentos) {
+      if (window.cargarSeccionFirestore) {
+        window.cargarSeccionFirestore(seccionId).then(function(pregsFirestore) {
+          if (pregsFirestore && pregsFirestore.length > 0) {
+            preguntasPorSeccion[seccionId] = pregsFirestore;
+            cont.innerHTML = '';
+            _renderRespuestasExamenContenido(cont, pregsFirestore);
+          } else {
+            cont.innerHTML = '<p style="text-align:center;color:#64748b;padding:40px;">No hay preguntas cargadas para este examen.</p>';
+          }
+        });
+      } else if (intentos < 20) {
+        setTimeout(function() { _intentarCargar(intentos + 1); }, 200);
+      } else {
+        cont.innerHTML = '<p style="text-align:center;color:#dc2626;padding:40px;">⚠️ No se pudo conectar. Recargá la página.</p>';
+      }
+    }
+    _intentarCargar(0);
+  }
+
+  function _renderRespuestasExamenContenido(cont, preguntas) {
+    preguntas.forEach(function(preg, idx) {
+      const pregDiv = document.createElement('div');
+      pregDiv.className = 'rc-pregunta';
+
+      // Número + enunciado
+      const enunciado = document.createElement('div');
+      enunciado.className = 'rc-enunciado';
+      enunciado.textContent = (idx + 1) + '. ' + preg.pregunta;
+      pregDiv.appendChild(enunciado);
+
+      // Imagen si existe
+      if (preg.imagen) {
+        const img = document.createElement('img');
+        img.src = getImagenUrl(preg.imagen);
+        img.className = 'rc-imagen';
+        img.alt = 'Imagen de la pregunta';
+        img.onclick = function() { window.open(this.src, '_blank'); };
+        pregDiv.appendChild(img);
+      }
+
+      // Badge de tipo (única / múltiple)
+      const badge = document.createElement('span');
+      badge.className = 'rc-badge-tipo';
+      badge.textContent = preg.multiple ? '✦ Múltiple opción' : '✦ Opción única';
+      pregDiv.appendChild(badge);
+
+      // Opciones
+      preg.opciones.forEach(function(opc, oi) {
+        const esCorrecta = preg.correcta.includes(oi);
+        const opcDiv = document.createElement('div');
+        opcDiv.className = 'rc-opcion' + (esCorrecta ? ' rc-opcion-correcta' : '');
+
+        const check = document.createElement('span');
+        check.className = 'rc-check';
+        check.textContent = esCorrecta ? '✅' : '◻';
+
+        const letra = document.createElement('span');
+        letra.className = 'rc-letra';
+        letra.textContent = String.fromCharCode(65 + oi) + '.';
+
+        const texto = document.createElement('span');
+        texto.textContent = opc;
+
+        opcDiv.appendChild(check);
+        opcDiv.appendChild(letra);
+        opcDiv.appendChild(texto);
+        pregDiv.appendChild(opcDiv);
+      });
+
+      // Explicación si existe
+      if (preg.explicacion && preg.explicacion.trim()) {
+        const expToggle = document.createElement('button');
+        expToggle.className = 'rc-btn-explicacion';
+        expToggle.textContent = '💡 Ver explicación';
+        expToggle.onclick = function() {
+          const expDiv = pregDiv.querySelector('.rc-explicacion');
+          if (expDiv) {
+            const visible = expDiv.style.display !== 'none';
+            expDiv.style.display = visible ? 'none' : 'block';
+            expToggle.textContent = visible ? '💡 Ver explicación' : '💡 Ocultar explicación';
+          }
+        };
+        pregDiv.appendChild(expToggle);
+
+        const expDiv = document.createElement('div');
+        expDiv.className = 'rc-explicacion';
+        expDiv.style.display = 'none';
+        expDiv.textContent = preg.explicacion;
+        pregDiv.appendChild(expDiv);
+      }
+
+      cont.appendChild(pregDiv);
+    });
+  }
+
+  // ======== Barra de navegación inferior: acceso rápido a todos los exámenes IAR ========
+  const NAV_BAR_EXAMENES = [
+    { year: '2020', exams: [
+      { id: 'iarsep2020', label: 'SEP' }, { id: 'iaroct2020', label: 'OCT' },
+      { id: 'iarnov2020', label: 'NOV' }, { id: 'iardic2020', label: 'DIC' }
+    ]},
+    { year: '2021', exams: [
+      { id: 'iarfeb2021', label: 'FEB' }, { id: 'iarmar2021', label: 'MAR' },
+      { id: 'iarabr2021', label: 'ABR' }, { id: 'iarmay2021', label: 'MAY' },
+      { id: 'iarjun2021', label: 'JUN' }, { id: 'iarago2021', label: 'AGO' },
+      { id: 'iarsep2021', label: 'SEP' }, { id: 'iarnov2021', label: 'NOV' },
+      { id: 'iardic2021', label: 'DIC' }
+    ]},
+    { year: '2022', exams: [
+      { id: 'iarmar2022', label: 'MAR' }, { id: 'iarabr2022', label: 'ABR' },
+      { id: 'iarjun2022', label: 'JUN' }, { id: 'iarago2022', label: 'AGO' },
+      { id: 'iaroct2022', label: 'OCT' }, { id: 'iardic2022', label: 'DIC' }
+    ]},
+    { year: '2023', exams: [
+      { id: 'iarmar2023', label: 'MAR' }, { id: 'iarabr2023', label: 'ABR' },
+      { id: 'iarmay2023', label: 'MAY' }, { id: 'iarjun2023', label: 'JUN' },
+      { id: 'iarago2023', label: 'AGO' }, { id: 'iaroct2023', label: 'OCT' },
+      { id: 'iardic2023', label: 'DIC' }
+    ]},
+    { year: '2024', exams: [
+      { id: 'iarmar2024', label: 'MAR' },
+      { id: 'iarabr2024', label: 'ABR' }, { id: 'iarmay2024', label: 'MAY' },
+      { id: 'iarjun2024', label: 'JUN' }, { id: 'iarago2024', label: 'AGO' },
+      { id: 'iarsep2024', label: 'SEP' }, { id: 'iaroct2024', label: 'OCT' },
+      { id: 'iarnov2024', label: 'NOV' }, { id: 'iardic2024', label: 'DIC' }
+    ]},
+    { year: '2025', exams: [
+      { id: 'iarfeb2025', label: 'FEB' }, { id: 'iarmar2025', label: 'MAR' },
+      { id: 'iarabr2025', label: 'ABR' },
+      { id: 'iarjun2025', label: 'JUN' },
+      { id: 'iarsep2025', label: 'SEP' }, { id: 'iaroct2025', label: 'OCT' },
+      { id: 'iarnov2025', label: 'NOV' }, { id: 'iardic2025', label: 'DIC' }
+    ]},
+    { year: '2026', exams: [
+      { id: 'iarfeb2026', label: 'FEB' }
+    ]}
+  ];
+
+  function getCompletedSections() {
+    var USER_KEY = 'iar_user_id_v1';
+    var COMPLETED_KEY_PREFIX = 'iar_completed_v1_';
+    try {
+      var uid = localStorage.getItem(USER_KEY);
+      if (!uid) return {};
+      var completedKey = COMPLETED_KEY_PREFIX + uid;
+      return JSON.parse(localStorage.getItem(completedKey) || '{}');
+    } catch(e) { return {}; }
+  }
+
+  function buildNavBar() {
+    // La barra se inyecta como elemento estático al final de cada pagina-cuestionario
+    // y también al final del panel del buscador.
+    // Se crea un único template y se clona/inyecta en cada contenedor.
+    _injectNavBarsIntoPages();
+  }
+
+  function _injectNavBarsIntoPages() {
+    const completed = getCompletedSections();
+
+    // Inyectar en todas las paginas-cuestionario EXCEPTO el simulacro
+    document.querySelectorAll('.pagina-cuestionario').forEach(function(page) {
+      if (page.id === 'simulacro_iar') return; // no mostrar barra en simulacro
+      _injectOrUpdateNavBar(page, completed);
+    });
+
+    // NO inyectar en submenús IAR ni en buscador
+  }
+
+  // Variable que indica el modo actual de la barra inferior
+  // 'normal' = navega a cuestionarios IAR | 'respuestas' = navega a respuestas correctas
+  let navBarModo = 'normal';
+
+  function _buildNavBarElement(completed) {
+    const bar = document.createElement('div');
+    bar.className = 'nav-bar-inferior-static nav-bar-visible';
+
+    const titulo = document.createElement('div');
+    titulo.className = 'nav-bar-titulo';
+    titulo.textContent = navBarModo === 'respuestas'
+      ? '📅 ACCESO RÁPIDO - EXÁMENES IAR - RESPUESTAS CORRECTAS'
+      : '📅 ACCESO RÁPIDO - EXÁMENES IAR - CUESTIONARIOS';
+    bar.appendChild(titulo);
+
+    // Una sola fila con wrap — año + botones fluyen juntos
+    const fila = document.createElement('div');
+    fila.className = 'nav-bar-fila';
+
+    NAV_BAR_EXAMENES.forEach(function(grupo) {
+      // Etiqueta del año inline
+      const yearLabel = document.createElement('span');
+      yearLabel.className = 'nav-bar-year';
+      yearLabel.textContent = grupo.year;
+      fila.appendChild(yearLabel);
+
+      // Botones de meses
+      grupo.exams.forEach(function(exam) {
+        const btn = document.createElement('button');
+        btn.className = 'nav-bar-btn' + (completed[exam.id] ? ' nav-bar-btn-completado' : '');
+        btn.setAttribute('data-seccion', exam.id);
+        btn.textContent = exam.label;
+        btn.title = 'IAR ' + exam.label + ' ' + grupo.year;
+        btn.addEventListener('click', function() {
+          if (navBarModo === 'respuestas') {
+            mostrarRespuestasExamen(exam.id);
+          } else {
+            navegarDesdeNavBar(exam.id);
+          }
+        });
+        fila.appendChild(btn);
+      });
+    });
+
+    bar.appendChild(fila);
+    return bar;
+  }
+
+  function _injectOrUpdateNavBar(container, completed) {
+    // Remover barra anterior si existe
+    const old = container.querySelector('.nav-bar-inferior-static');
+    if (old) old.remove();
+
+    const bar = _buildNavBarElement(completed || getCompletedSections());
+    container.appendChild(bar);
+  }
+
+  function renderNavBar() {
+    // Actualiza colores de todos los botones en todas las barras estáticas inyectadas
+    const completed = getCompletedSections();
+    document.querySelectorAll('.nav-bar-inferior-static .nav-bar-btn').forEach(function(btn) {
+      const sid = btn.getAttribute('data-seccion');
+      if (completed[sid]) {
+        btn.classList.add('nav-bar-btn-completado');
+      } else {
+        btn.classList.remove('nav-bar-btn-completado');
+      }
+    });
+    // Actualizar títulos según el modo
+    const tituloTexto = navBarModo === 'respuestas'
+      ? '📅 ACCESO RÁPIDO - EXÁMENES IAR - RESPUESTAS CORRECTAS'
+      : '📅 ACCESO RÁPIDO - EXÁMENES IAR - CUESTIONARIOS';
+    document.querySelectorAll('.nav-bar-inferior-static .nav-bar-titulo').forEach(function(t) {
+      t.textContent = tituloTexto;
+    });
+  }
+  window.renderNavBar = renderNavBar;
+
+  function navegarDesdeNavBar(seccionId) {
+    // ── BLOQUEO DEMO ──
+    if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
+        !window._demoSeccionesPermitidas.includes(seccionId)) {
+      if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
+      return;
+    }
+    // Si ya estamos en ese cuestionario, no hacer nada
+    if (currentSection === seccionId) return;
+
+    // ¿Hay un cuestionario en curso?
+    const hayCuestionarioEnCurso = currentSection && state[currentSection] &&
+      !state[currentSection].totalShown &&
+      state[currentSection].graded &&
+      Object.keys(state[currentSection].graded).some(k => state[currentSection].graded[k]);
+
+    // ¿Hay una búsqueda en curso?
+    const panelBuscador = document.getElementById('buscador-preguntas');
+    const hayBusqueda = panelBuscador && !panelBuscador.classList.contains('oculto') &&
+      (document.getElementById('buscador-input')?.value || '').trim().length >= 2;
+
+    if (hayCuestionarioEnCurso) {
+      mostrarDialogoNavBar(
+        '📋 ¿Salir del cuestionario actual?',
+        'Estás en medio de un cuestionario con respuestas marcadas.\n\nTu progreso se guardará y podrás retomarlo cuando quieras. ¿Querés ir a otro examen?',
+        '✅ Sí, cambiar de examen',
+        '↩️ No, seguir aquí',
+        function() {
+          ejecutarNavegacionNavBar(seccionId);
+        }
+      );
+    } else if (hayBusqueda) {
+      mostrarDialogoNavBar(
+        '🔍 ¿Abandonar la búsqueda?',
+        'Tenés una búsqueda en proceso. Si navegás ahora, se borrará la búsqueda actual.',
+        '✅ Sí, ir al examen',
+        '↩️ No, seguir buscando',
+        function() {
+          window.limpiarBusqueda && window.limpiarBusqueda();
+          ejecutarNavegacionNavBar(seccionId);
+        }
+      );
+    } else {
+      ejecutarNavegacionNavBar(seccionId);
     }
   }
 
-  // ── Hook público: llamado desde renderOAVPage al final ───────────
-  window._oavRenderComentarios = _comRender;
+  function ejecutarNavegacionNavBar(seccionId) {
+    // Limpiar estado del cuestionario actual si es necesario
+    if (currentSection && state[currentSection]) {
+      const s = state[currentSection];
+      if (s.totalShown) {
+        limpiarSeccion(currentSection, true);
+      } else {
+        const hayRespuestas = s.graded && Object.keys(s.graded).some(k => s.graded[k]);
+        limpiarSeccion(currentSection, !hayRespuestas);
+      }
+    }
+    navegacionOrigen = 'submenu';
+    saveScrollPosition();
+    saveLastSection(seccionId);
+    history.pushState({ section: seccionId, origen: 'submenu' }, `Cuestionario ${seccionId}`, `#${seccionId}`);
+    showSection(seccionId);
+  }
 
-  console.log('[IAR Comentarios] ✅ Sistema de comentarios v2 listo.');
+  function mostrarDialogoNavBar(titulo, mensaje, textoAceptar, textoCancelar, onAceptar) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);z-index:99999;display:flex;justify-content:center;align-items:center;';
+
+    const dialogo = document.createElement('div');
+    dialogo.style.cssText = 'background:#fff;padding:28px 32px;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,0.22);max-width:420px;width:90%;text-align:center;';
+
+    const tit = document.createElement('h3');
+    tit.textContent = titulo;
+    tit.style.cssText = 'margin:0 0 14px;color:#1f2937;font-size:1.15rem;line-height:1.4;';
+
+    const msg = document.createElement('p');
+    msg.textContent = mensaje;
+    msg.style.cssText = 'margin:0 0 22px;color:#475569;font-size:0.93rem;line-height:1.6;white-space:pre-line;';
+
+    const btns = document.createElement('div');
+    btns.style.cssText = 'display:flex;gap:10px;justify-content:center;flex-wrap:wrap;';
+
+    const btnSi = document.createElement('button');
+    btnSi.textContent = textoAceptar;
+    btnSi.style.cssText = 'padding:10px 22px;background:#0d7490;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:0.9rem;';
+    btnSi.onclick = function() { document.body.removeChild(overlay); onAceptar(); };
+
+    const btnNo = document.createElement('button');
+    btnNo.textContent = textoCancelar;
+    btnNo.style.cssText = 'padding:10px 22px;background:#e2e8f0;color:#475569;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:0.9rem;';
+    btnNo.onclick = function() { document.body.removeChild(overlay); };
+
+    btns.appendChild(btnSi);
+    btns.appendChild(btnNo);
+    dialogo.appendChild(tit);
+    dialogo.appendChild(msg);
+    dialogo.appendChild(btns);
+    overlay.appendChild(dialogo);
+    document.body.appendChild(overlay);
+  }
+
+  // Actualizar colores de la barra al volver al menú o submenú
+  const _origShowMenu = showMenu;
+  // (hook will be applied after DOMContentLoaded)
+
+  // ======== Botón flotante "Ver mi progreso" ========
+  // Función para abrir/cerrar el panel de progreso (reutilizable desde botones inline)
+  window.togglePanelProgreso = function() {
+    const panel = document.getElementById("panel-progreso");
+    if (!panel) return;
+    if (panel.style.display === "block") {
+      panel.style.display = "none";
+    } else {
+      const content = document.getElementById("contenido-progreso");
+      if (content) renderProgress(content);
+      panel.style.display = "block";
+    }
+  };
+
+  function buildProgressUI() {
+    const btn = document.createElement("button");
+    btn.id = "btn-ver-progreso";
+    btn.textContent = "Ver mi progreso";
+    btn.style.position = "fixed";
+    btn.style.right = "16px";
+    btn.style.bottom = "16px";
+    btn.style.zIndex = "1000";
+    btn.style.padding = "10px 14px";
+    btn.style.border = "none";
+    btn.style.borderRadius = "999px";
+    btn.style.boxShadow = "0 4px 12px rgba(0,0,0,.15)";
+    btn.style.cursor = "pointer";
+    btn.style.fontWeight = "bold";
+    btn.style.background = "#2ecc71";
+    btn.style.color = "#fff";
+    // El botón flotante solo es visible en el menú principal
+    btn.style.display = "none";
+    document.body.appendChild(btn);
+
+    const panel = document.createElement("div");
+    panel.id = "panel-progreso";
+    panel.style.position = "fixed";
+    panel.style.right = "16px";
+    panel.style.bottom = "70px";
+    panel.style.width = "320px";
+    panel.style.maxWidth = "92vw";
+    panel.style.maxHeight = "60vh";
+    panel.style.overflow = "auto";
+    panel.style.background = "#fff";
+    panel.style.border = "1px solid #dee2e6";
+    panel.style.borderRadius = "12px";
+    panel.style.boxShadow = "0 8px 24px rgba(0,0,0,.2)";
+    panel.style.padding = "12px";
+    panel.style.display = "none";
+    panel.style.zIndex = "1001";
+
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+    const title = document.createElement("strong");
+    title.textContent = "Historial de intentos";
+    const close = document.createElement("button");
+    close.textContent = "Cerrar";
+    close.style.border = "none";
+    close.style.background = "#e0e0e0";
+    close.style.borderRadius = "8px";
+    close.style.padding = "6px 10px";
+    close.style.cursor = "pointer";
+    header.appendChild(title);
+    header.appendChild(close);
+
+    const content = document.createElement("div");
+    content.id = "contenido-progreso";
+    content.style.marginTop = "10px";
+    content.innerHTML = "<em>Sin intentos aún.</em>";
+
+    // Botón borrar historial
+    const btnBorrar = document.createElement("button");
+    btnBorrar.id = "btn-borrar-historial";
+    btnBorrar.textContent = "🗑️ Borrar mi historial";
+    btnBorrar.style.cssText = "margin-top:14px;width:100%;padding:8px 10px;border:1.5px solid #fca5a5;border-radius:8px;background:#fff5f5;color:#b91c1c;font-weight:bold;cursor:pointer;font-size:.85rem;display:none;";
+    btnBorrar.addEventListener("click", function() {
+      if (!confirm("¿Seguro que querés borrar todo tu historial de intentos?\nEsta acción no se puede deshacer.")) return;
+      attemptLog = [];
+      saveJSON(ATTEMPT_LOG_KEY, []);
+      // Borrar también en Firestore
+      if (_firestoreUID && _firestoreDB) {
+        import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js").then(function(fsModule) {
+          const ref = fsModule.doc(_firestoreDB, "progreso", _firestoreUID, "datos", "historial");
+          fsModule.setDoc(ref, { entries: [], _ts: fsModule.serverTimestamp() })
+            .then(function() { console.log("[IAR Sync] 🗑️ Historial borrado en Firestore"); })
+            .catch(function(e) { console.warn("[IAR Sync] Error borrando historial en Firestore:", e.message); });
+        });
+      }
+      const c = document.getElementById("contenido-progreso");
+      if (c) c.innerHTML = "<em>Sin intentos aún.</em>";
+      btnBorrar.style.display = "none";
+    });
+
+    panel.appendChild(header);
+    panel.appendChild(content);
+    panel.appendChild(btnBorrar);
+    document.body.appendChild(panel);
+
+    btn.addEventListener("click", () => window.togglePanelProgreso());
+    close.addEventListener("click", () => (panel.style.display = "none"));
+  }
+
+  // ======== Agregar botón estático "Ver mi progreso" en páginas de cuestionario ========
+  function insertarBotonesProgresoInline() {
+    document.querySelectorAll(".pagina-cuestionario").forEach(function(pagina) {
+      pagina.querySelectorAll("div").forEach(function(div) {
+        const reiniciar = div.querySelector(".btn-reiniciar");
+        if (!reiniciar) return;
+        if (div.querySelector(".btn-progreso-inline")) return;
+        const btnProgreso = document.createElement("button");
+        btnProgreso.className = "btn-reiniciar btn-progreso-inline";
+        btnProgreso.textContent = "📊 Ver mi progreso";
+        btnProgreso.addEventListener("click", function() {
+          window.togglePanelProgreso();
+        });
+        reiniciar.insertAdjacentElement("afterend", btnProgreso);
+      });
+    });
+  }
+
+  function renderProgress(container) {
+    const data = loadJSON(ATTEMPT_LOG_KEY, []);
+    const btnBorrar = document.getElementById("btn-borrar-historial");
+    if (!data.length) {
+      container.innerHTML = "<em>Sin intentos aún.</em>";
+      if (btnBorrar) btnBorrar.style.display = "none";
+      return;
+    }
+    if (btnBorrar) btnBorrar.style.display = "block";
+
+    const sorted = data.slice().sort((a, b) => {
+      const da = new Date(a.iso).getTime();
+      const db = new Date(b.iso).getTime();
+      if (db !== da) return db - da;
+      if (a.sectionTitle !== b.sectionTitle) return a.sectionTitle.localeCompare(b.sectionTitle);
+      return db - da;
+    });
+
+    const byDate = {};
+    sorted.forEach(item => {
+      const d = toLocalDateStr(item.iso);
+      if (!byDate[d]) byDate[d] = [];
+      byDate[d].push(item);
+    });
+
+    container.innerHTML = "";
+    Object.keys(byDate).forEach(dateLabel => {
+      const group = document.createElement("div");
+      group.style.marginBottom = "12px";
+      const h = document.createElement("div");
+      h.style.fontWeight = "bold";
+      h.style.marginBottom = "6px";
+      h.textContent = dateLabel;
+      group.appendChild(h);
+
+      byDate[dateLabel].forEach(item => {
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.justifyContent = "space-between";
+        row.style.alignItems = "center";
+        row.style.padding = "6px 8px";
+        row.style.border = "1px solid #eee";
+        row.style.borderRadius = "8px";
+        row.style.marginBottom = "6px";
+        const left = document.createElement("div");
+        left.textContent = item.sectionTitle;
+        const right = document.createElement("div");
+        right.textContent = `${item.score}/${item.total}`;
+        right.style.fontWeight = "bold";
+        row.appendChild(left);
+        row.appendChild(right);
+        group.appendChild(row);
+      });
+
+      container.appendChild(group);
+    });
+  }
+
+  // ======== Inicio ========
+  document.addEventListener("DOMContentLoaded", () => {
+    buildProgressUI();
+    insertarBotonesProgresoInline();
+    buildNavBar();
+    setupBrowserNavigation();
+    clearScrollPosition();
+
+    // ── Limpiar progreso del Simulacro IAR si el usuario recarga o cierra la página ──
+    // El progreso del simulacro NO se guarda entre sesiones si está incompleto.
+    // "pagehide" se dispara en recarga, cierre de pestaña y navegación a otra página.
+    window.addEventListener('pagehide', function() {
+      try {
+        var rawSt = localStorage.getItem('quiz_state_v3');
+        if (!rawSt) return;
+        var allSt = JSON.parse(rawSt);
+        var simSt = allSt['simulacro_iar'];
+        // Solo limpiar si hay progreso incompleto (respondió ≥1 pero no terminó)
+        if (simSt && !simSt.totalShown) {
+          var nGraded = simSt.graded ? Object.keys(simSt.graded).filter(function(k){ return simSt.graded[k]; }).length : 0;
+          var nAnswers = simSt.answers ? Object.keys(simSt.answers).filter(function(k){ var a = simSt.answers[k]; return Array.isArray(a) && a.length > 0; }).length : 0;
+          if (nGraded > 0 || nAnswers > 0) {
+            // Limpiar estado en localStorage
+            delete allSt['simulacro_iar'];
+            localStorage.setItem('quiz_state_v3', JSON.stringify(allSt));
+            localStorage.removeItem('simulacro_iar_preguntas_v1');
+            localStorage.removeItem('simulacro_iar_tiene_progreso_v1');
+            localStorage.removeItem('simulacro_iar_timer_end_v1');
+          }
+        }
+      } catch(e) {}
+    });
+
+  const hash = window.location.hash.substring(1);
+  // Lista de todas las secciones válidas (aunque preguntasPorSeccion esté vacío por Firestore)
+  const SECCIONES_VALIDAS = [
+    'iarsep2020','iaroct2020','iarnov2020','iardic2020',
+    'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
+    'iarmar2022','iarabr2022','iarjun2022','iarago2022','iaroct2022','iardic2022',
+    'iarmar2023','iarabr2023','iarmay2023','iarjun2023','iarago2023','iaroct2023','iardic2023',
+    'iarmar2024','iarabr2024','iarmay2024','iarjun2024','iarago2024','iarsep2024','iaroct2024','iarnov2024','iardic2024',
+    'iarfeb2025','iarmar2025','iarabr2025','iarjun2025','iarsep2025','iaroct2025','iarnov2025','iardic2025',
+    'iarfeb2026','simulacro_iar'
+  ];
+  if (hash && hash !== 'menu' && SECCIONES_VALIDAS.includes(hash)) {
+    showSection(hash);
+    currentSection = hash;
+  } else if (hash === 'respuestas') {
+    if (window._esAdmin) { mostrarRespuestasCorrectas(); } else { history.replaceState({ section: null }, 'Menú Principal', '#menu'); showMenu(); }
+  } else if (hash && hash.startsWith('respuestas-')) {
+    const secId = hash.replace('respuestas-', '');
+    if (window._esAdmin) { mostrarRespuestasExamen(secId); } else { history.replaceState({ section: null }, 'Menú Principal', '#menu'); showMenu(); }
+  } else if (hash && document.getElementById(hash)) {
+    // ← NUEVO: el hash corresponde a un submenú (ej: 'iar-submenu', 'otro-submenu')
+    // Restaurar el submenú sin ir al menú principal
+    const submenuEl = document.getElementById(hash);
+    const esSubmenu = submenuEl && (submenuEl.classList.contains('menu-principal') || submenuEl.id.endsWith('-submenu'));
+    if (esSubmenu) {
+      document.getElementById("menu-principal")?.classList.add("oculto");
+      document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+      document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
+      submenuEl.style.display = "block";
+      history.replaceState({ submenu: hash }, hash, `#${hash}`);
+    } else {
+      history.replaceState({ section: null }, 'Menú Principal', '#menu');
+      showMenu();
+    }
+  } else {
+    history.replaceState({ section: null }, 'Menú Principal', '#menu');
+    showMenu();
+  }
+  });
+
+  // ======== MEDIDAS DE SEGURIDAD ========
+  
+  document.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      return false;
+  });
+
+  document.addEventListener('keydown', function(e) {
+      if (e.keyCode === 123 ||
+          (e.ctrlKey && e.shiftKey && (e.keyCode === 73 || e.keyCode === 74)) ||
+          (e.ctrlKey && e.keyCode === 85) ||
+          (e.ctrlKey && e.keyCode === 83) ||
+          (e.ctrlKey && e.keyCode === 80) ||
+          (e.ctrlKey && e.keyCode === 65)) {
+          e.preventDefault();
+          return false;
+      }
+  });
+
+  // Detección de DevTools: usa diferencia outer/inner SOLO cuando el zoom del navegador
+  // es 100% (devicePixelRatio igual al valor base). El zoom cambia devicePixelRatio,
+  // por eso lo usamos para filtrar falsos positivos.
+  let devtools = {open: false};
+  let _basePixelRatio = window.devicePixelRatio || 1;
+  setInterval(function() {
+      let currentRatio = window.devicePixelRatio || 1;
+      // Si el ratio cambió respecto al inicio, el usuario hizo zoom → ignorar
+      if (Math.abs(currentRatio - _basePixelRatio) > 0.05) {
+          _basePixelRatio = currentRatio; // actualizar base ante nuevo nivel de zoom
+          devtools.open = false;
+          return;
+      }
+      // Sin zoom: diferencia grande entre outer e inner indica DevTools acoplado
+      let widthDiff  = window.outerWidth  - window.innerWidth;
+      let heightDiff = window.outerHeight - window.innerHeight;
+      // Umbral generoso (300px) para evitar falsos positivos en pantallas pequeñas
+      if (widthDiff > 300 || heightDiff > 300) {
+          if (!devtools.open) {
+              devtools.open = true;
+              alert('Por favor, cierre las herramientas de desarrollo para continuar.');
+              window.location.reload();
+          }
+      } else {
+          devtools.open = false;
+      }
+  }, 500);
+
+  document.addEventListener('dragstart', function(e) {
+      e.preventDefault();
+      return false;
+  });
+
+  document.addEventListener('selectstart', function(e) {
+      if (!e.target.matches('input, textarea')) {
+          e.preventDefault();
+          return false;
+      }
+  });
+
+  window.addEventListener('beforeprint', function(e) {
+      e.preventDefault();
+      alert('La impresión no está permitida en esta aplicación.');
+      return false;
+  });
+
+  console.log('%cADVERTENCIA!', 'color: red; font-size: 50px; font-weight: bold;');
+  console.log('%cEsta función del navegador está destinada a desarrolladores. Si alguien te pidió copiar y pegar algo aquí, es una estafa.', 'color: red; font-size: 16px;');
+  
+  setInterval(function() {
+      console.clear();
+  }, 3000);
+
+
+  // ======== SIMULACRO IAR — 20 preguntas de la base IAR mensual ========
+  // REGLA: siempre nuevo simulacro al entrar, SALVO que haya ≥1 respuesta guardada
+  //        (en cuyo caso se conserva hasta terminar, reiniciar o crear nuevo).
+
+  const SIMULACRO_IAR_KEY   = 'simulacro_iar_preguntas_v1';
+  const SIMULACRO_IAR_PROGRESO = 'simulacro_iar_tiene_progreso_v1'; // '1' si respondió ≥1
+
+  const SECCIONES_IAR_SIMULACRO = [
+    'iarsep2020','iaroct2020','iarnov2020','iardic2020',
+    'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
+    'iarmar2022','iarabr2022','iarjun2022','iarago2022','iaroct2022','iardic2022',
+    'iarmar2023','iarabr2023','iarmay2023','iarjun2023','iarago2023','iaroct2023','iardic2023',
+    'iarmar2024','iarabr2024','iarmay2024','iarjun2024','iarago2024','iarsep2024','iaroct2024','iarnov2024','iardic2024',
+    'iarfeb2025','iarmar2025','iarabr2025','iarjun2025','iarsep2025','iaroct2025','iarnov2025','iardic2025',
+    'iarfeb2026'
+  ];
+
+  function _tieneProgresoSimulacroIAR() {
+    // Leer desde localStorage (fuente de verdad: script_onebyone.js escribe ahí directamente)
+    return _hayProgresoEnStorage('simulacro_iar');
+  }
+
+  function generarNuevasPreguntasSimulacroIAR() {
+    var TARGET = 20;
+    var todasLasPreguntas = [];
+    SECCIONES_IAR_SIMULACRO.forEach(function(sec) {
+      var pregs = preguntasPorSeccion[sec];
+      if (!Array.isArray(pregs) || pregs.length === 0) return;
+      pregs.forEach(function(p, i) {
+        todasLasPreguntas.push({ seccion: sec, idx: i, pregunta: p });
+      });
+    });
+
+    if (todasLasPreguntas.length === 0) {
+      console.warn('[SimulacroIAR] No hay preguntas IAR cargadas aún');
+      return [];
+    }
+
+    // Separar preguntas independientes y grupos
+    var unidadesMap = {};
+    var unidadesSueltas = [];
+    todasLasPreguntas.forEach(function(item) {
+      var gid = item.pregunta.grupoId;
+      if (gid) {
+        if (!unidadesMap[gid]) unidadesMap[gid] = [];
+        unidadesMap[gid].push(item);
+      } else {
+        unidadesSueltas.push([item]);
+      }
+    });
+
+    // Ordenar cada grupo internamente: por ordenEnGrupo (si existe), luego por índice original
+    Object.keys(unidadesMap).forEach(function(gid) {
+      unidadesMap[gid].sort(function(a, b) {
+        var oa = (a.pregunta.ordenEnGrupo != null) ? Number(a.pregunta.ordenEnGrupo) : a.idx;
+        var ob = (b.pregunta.ordenEnGrupo != null) ? Number(b.pregunta.ordenEnGrupo) : b.idx;
+        if (oa !== ob) return oa - ob;
+        return a.idx - b.idx; // desempate por índice original en la sección
+      });
+    });
+
+    var unidadesGrupo = Object.values(unidadesMap);
+
+    // Validar integridad de grupos: descartar grupos incompletos (faltan preguntas en Firestore)
+    unidadesGrupo = unidadesGrupo.filter(function(grupo) {
+      var esperadas = grupo[0] && grupo[0].pregunta.totalEnGrupo ? Number(grupo[0].pregunta.totalEnGrupo) : grupo.length;
+      var completo = grupo.length === esperadas;
+      if (!completo) {
+        console.warn('[SimulacroIAR] Grupo incompleto descartado: ' + (grupo[0] && grupo[0].pregunta.grupoId) +
+          ' — tiene ' + grupo.length + '/' + esperadas + ' preguntas');
+      }
+      return completo;
+    });
+
+    // Mezclar independientes y elegir exactamente 1 grupo (si cabe)
+    var sueltas = shuffle(unidadesSueltas, 'sim-sueltas-' + Date.now());
+    var grupos  = shuffle(unidadesGrupo,  'sim-grupos-'  + Date.now());
+
+    // Primero elegir las preguntas sueltas que vamos a usar
+    var grupoElegido = null;
+    var cantGrupo = 0;
+    if (grupos.length > 0 && grupos[0].length <= TARGET - 1) {
+      grupoElegido = grupos[0]; // ya está ordenado internamente por ordenEnGrupo
+      cantGrupo = grupoElegido.length;
+      console.log('[SimulacroIAR] Grupo elegido: ' + grupoElegido[0].pregunta.grupoId +
+        ' (' + cantGrupo + ' preguntas, ordenadas por ordenEnGrupo: ' +
+        grupoElegido.map(function(g){ return g.pregunta.ordenEnGrupo; }).join('→') + ')');
+    }
+
+    // Tomar las sueltas necesarias para llegar a TARGET
+    var sueltasElegidas = [];
+    for (var i = 0; i < sueltas.length && sueltasElegidas.length < TARGET - cantGrupo; i++) {
+      sueltasElegidas.push(sueltas[i][0]);
+    }
+
+    // Insertar el bloque del grupo en una posición aleatoria dentro de las sueltas
+    // El bloque siempre es contiguo y en el orden correcto (ordenEnGrupo 1→2→3→4)
+    var seleccionadas = sueltasElegidas.slice();
+    if (grupoElegido) {
+      // Posición aleatoria: entre 0 y sueltasElegidas.length (inclusive)
+      var posInsercion = Math.floor(Math.random() * (sueltasElegidas.length + 1));
+      // Insertar de adelante hacia atrás para mantener el orden correcto del grupo
+      for (var j = grupoElegido.length - 1; j >= 0; j--) {
+        seleccionadas.splice(posInsercion, 0, grupoElegido[j]);
+      }
+      console.log('[SimulacroIAR] Bloque del grupo insertado en posición ' + posInsercion +
+        ' (preguntas ' + (posInsercion+1) + '–' + (posInsercion+cantGrupo) + ' del simulacro)');
+    }
+
+    var grupoUsado = grupoElegido !== null;
+
+    console.log('[SimulacroIAR] Generado: ' + seleccionadas.length + ' preguntas (grupo=' + grupoUsado + ')');
+    localStorage.setItem(SIMULACRO_IAR_KEY, JSON.stringify(seleccionadas));
+    return seleccionadas;
+  }
+
+  function _persistirPreguntasSimulacroIAREnStorage() {
+    try {
+      var pregs = preguntasPorSeccion['simulacro_iar'];
+      if (!pregs || pregs.length === 0) return;
+      var items = pregs.map(function(p) { return { pregunta: p }; });
+      localStorage.setItem(SIMULACRO_IAR_KEY, JSON.stringify(items));
+    } catch(e) {}
+  }
+
+  function _limpiarSimulacroIARSinProgreso() {
+    // Limpiar el timer del simulacro (widget + localStorage key)
+    if (window._simulacroTimer) window._simulacroTimer.limpiar();
+    localStorage.removeItem(SIMULACRO_IAR_KEY);
+    try { localStorage.removeItem(SIMULACRO_IAR_PROGRESO); } catch(e) {}
+    delete state['simulacro_iar'];
+    saveJSON(STORAGE_KEY, state);
+    // Borrar en Firestore para evitar restauración de progreso viejo
+    _borrarSeccionFirestore('simulacro_iar');
+    if (window.puntajesPorSeccion) delete window.puntajesPorSeccion['simulacro_iar'];
+    delete preguntasPorSeccion['simulacro_iar'];
+    _limpiarOAVIdx('simulacro_iar');
+    var rt = document.getElementById('resultado-total-simulacro_iar');
+    if (rt) { rt.textContent = ''; rt.className = 'resultado-final'; }
+  }
+
+  // Carga secciones desde Firestore para recuperar preguntas del simulacro en progreso
+  // (caso: usuario tenía progreso pero recargó la página y la memoria se perdió)
+  function _cargarConProgresoDesdeFirestore() {
+    var cont = document.getElementById('cuestionario-simulacro_iar');
+    if (cont) {
+      cont.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
+        '<div style="font-size:2rem;margin-bottom:12px;">⏳</div>' +
+        '<div style="font-size:1rem;font-weight:600;">Recuperando tu progreso...</div>' +
+        '<div style="font-size:.85rem;margin-top:8px;color:#94a3b8;">Un momento...</div>' +
+        '</div>';
+    }
+    var seccionesFaltantes = SECCIONES_IAR_SIMULACRO.filter(function(sec) {
+      return !Array.isArray(preguntasPorSeccion[sec]) || preguntasPorSeccion[sec].length === 0;
+    });
+    function _esperar(intentos) {
+      if (!window.cargarSeccionFirestore) {
+        if (intentos < 30) { setTimeout(function() { _esperar(intentos + 1); }, 200); }
+        return;
+      }
+      var promesas = seccionesFaltantes.map(function(sec) {
+        return window.cargarSeccionFirestore(sec).then(function(pregs) {
+          if (pregs && pregs.length > 0) preguntasPorSeccion[sec] = pregs;
+        }).catch(function() {});
+      });
+      Promise.all(promesas).then(function() {
+        if (currentSection !== 'simulacro_iar') return;
+        // Ahora intentar recuperar las preguntas guardadas en SIMULACRO_IAR_KEY
+        var guardadas = loadJSON(SIMULACRO_IAR_KEY, null);
+        if (guardadas && guardadas.length > 0) {
+          preguntasPorSeccion['simulacro_iar'] = guardadas.map(function(i) { return i.pregunta; });
+          generarCuestionario('simulacro_iar');
+        } else {
+          // Fallback: generar nuevo (no deberíamos llegar aquí)
+          var items = generarNuevasPreguntasSimulacroIAR();
+          if (items && items.length > 0) {
+            preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
+            generarCuestionario('simulacro_iar');
+          }
+        }
+      });
+    }
+    _esperar(0);
+  }
+
+  // Exponer para firebase-auth.js (logout) y otros modulos externos
+  window._tieneProgresoSimulacroIARPublic = _tieneProgresoSimulacroIAR;
+  window._persistirPreguntasSimulacroIAREnStorage = _persistirPreguntasSimulacroIAREnStorage;
+
+  window.inicializarSimulacroIAR = function() {
+    // ── BLOQUEO DEMO: esperar a que la licencia esté verificada ──
+    // Esto evita que un usuario demo acceda al simulacro con F5 o navegación
+    // rápida antes de que _demoCheckEnabled esté activo.
+    var _licPromise = window._licenciaVerificada || Promise.resolve({ esDemo: false });
+    _licPromise.then(function(lic) {
+      if (lic.esDemo) {
+        // Redirigir al menú y mostrar modal de restricción
+        if (typeof mostrarSeccion === 'function') mostrarSeccion('menu-principal');
+        else { document.getElementById('simulacro_iar')?.classList.remove('activa'); document.getElementById('menu-principal')?.classList.remove('oculto'); }
+        if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
+        return;
+      }
+      _inicializarSimulacroIARInterno();
+    });
+  };
+
+  function _inicializarSimulacroIARInterno() {
+    // Progreso real = respondió ≥1 pregunta Y no terminó (totalShown)
+    if (_tieneProgresoSimulacroIAR()) {
+      // Intentar recuperar preguntas desde memoria primero
+      if (preguntasPorSeccion['simulacro_iar'] && preguntasPorSeccion['simulacro_iar'].length > 0) {
+        console.log('[SimulacroIAR] Progreso detectado (memoria) → conservando y mostrando');
+        generarCuestionario('simulacro_iar');
+        return;
+      }
+      // Si la memoria está vacía (ej: recarga de página), recuperar desde localStorage
+      var guardadas = loadJSON(SIMULACRO_IAR_KEY, null);
+      if (guardadas && guardadas.length > 0) {
+        console.log('[SimulacroIAR] Progreso detectado (localStorage) → recuperando ' + guardadas.length + ' preguntas');
+        preguntasPorSeccion['simulacro_iar'] = guardadas.map(function(i) { return i.pregunta; });
+        generarCuestionario('simulacro_iar');
+        return;
+      }
+      // Si tampoco hay en localStorage, necesitamos recargar desde Firestore
+      // para poder mostrar las preguntas con el progreso guardado
+      console.log('[SimulacroIAR] Progreso detectado pero sin preguntas en cache → recargando desde Firestore');
+      // Continúa al flujo de carga desde Firestore (no hace return)
+      // pero SIN limpiar el progreso (_limpiarSimulacroIARSinProgreso NO se llama aquí)
+      _cargarConProgresoDesdeFirestore();
+      return;
+    }
+
+    // Sin progreso (nuevo inicio, reinicio sin responder, o vuelta al menú sin responder) → nuevo simulacro
+    _limpiarSimulacroIARSinProgreso();
+
+    // Verificar secciones faltantes en memoria
+    var seccionesFaltantes = SECCIONES_IAR_SIMULACRO.filter(function(sec) {
+      return !Array.isArray(preguntasPorSeccion[sec]) || preguntasPorSeccion[sec].length === 0;
+    });
+
+    if (seccionesFaltantes.length === 0) {
+      // Todas en memoria → generar y mostrar
+      var items = generarNuevasPreguntasSimulacroIAR();
+      if (items && items.length > 0) {
+        preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
+        generarCuestionario('simulacro_iar');
+      }
+      return;
+    }
+
+    // Hay secciones sin cargar → cargar todas en paralelo desde Firestore
+    var cont = document.getElementById('cuestionario-simulacro_iar');
+    if (cont) {
+      cont.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
+        '<div style="font-size:2rem;margin-bottom:12px;">⏳</div>' +
+        '<div style="font-size:1rem;font-weight:600;">Cargando banco de preguntas...</div>' +
+        '<div style="font-size:.85rem;margin-top:8px;color:#94a3b8;">Esto solo ocurre la primera vez</div>' +
+        '</div>';
+    }
+
+    function _esperarFirestore(intentos) {
+      if (!window.cargarSeccionFirestore) {
+        if (intentos < 30) { setTimeout(function() { _esperarFirestore(intentos + 1); }, 200); }
+        return;
+      }
+      var promesas = seccionesFaltantes.map(function(sec) {
+        return window.cargarSeccionFirestore(sec).then(function(pregs) {
+          if (pregs && pregs.length > 0) preguntasPorSeccion[sec] = pregs;
+        }).catch(function() {});
+      });
+      Promise.all(promesas).then(function() {
+        if (currentSection !== 'simulacro_iar') return;
+        var items = generarNuevasPreguntasSimulacroIAR();
+        if (items && items.length > 0) {
+          preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
+          generarCuestionario('simulacro_iar');
+        } else if (cont) {
+          cont.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#dc2626;">' +
+            '<div style="font-size:2rem;margin-bottom:12px;">⚠️</div>' +
+            '<div style="font-size:1rem;font-weight:600;">No se pudieron cargar las preguntas.</div>' +
+            '<div style="font-size:.88rem;margin-top:8px;">Verificá tu conexión e intentá nuevamente.</div>' +
+            '</div>';
+        }
+      });
+    }
+    _esperarFirestore(0);
+  };
+
+  window.crearNuevoSimulacroIAR = function() {
+    mostrarDialogoConfirmacion(
+      '¿Crear nuevo cuestionario IAR?',
+      '¿Estás seguro de que deseas crear un nuevo simulacro?\n\nSe generarán 20 preguntas nuevas. Se borrará TODO el progreso del simulacro actual.\nEsta acción no se puede deshacer.',
+      function() {
+        _limpiarSimulacroIARSinProgreso();
+        var items = generarNuevasPreguntasSimulacroIAR();
+        preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
+        generarCuestionario('simulacro_iar');
+        window.scrollTo(0, 0);
+      },
+      null,
+      { labelAceptar: '🎲 CREAR NUEVO', labelCancelar: 'CANCELAR', colorAceptar: '#1e40af' }
+    );
+  };
+
+  window.reiniciarSimulacroIAR = function() {
+    mostrarDialogoConfirmacion(
+      '¿Reiniciar este simulacro?',
+      '¿Estás seguro de que deseas reiniciar este simulacro?\n\nSe borrarán TODAS tus respuestas y la puntuación. Si deseás generar preguntas NUEVAS, usá el botón "🎲 Crear nuevo cuestionario IAR".\nEsta acción no se puede deshacer.',
+      function() {
+        // Guardar las preguntas actuales ANTES de limpiar el estado
+        var preguntasActuales = preguntasPorSeccion['simulacro_iar']
+          ? preguntasPorSeccion['simulacro_iar'].slice()
+          : null;
+
+        // Limpiar solo el estado de progreso (respuestas, calificaciones) — SIN borrar las preguntas del localStorage
+        delete state['simulacro_iar'];
+        saveJSON(STORAGE_KEY, state);
+        // Borrar en Firestore para evitar restauración de progreso viejo
+        _borrarSeccionFirestore('simulacro_iar');
+        if (window.puntajesPorSeccion) delete window.puntajesPorSeccion['simulacro_iar'];
+        var rt = document.getElementById('resultado-total-simulacro_iar');
+        if (rt) { rt.textContent = ''; rt.className = 'resultado-final'; }
+
+        // Restaurar las MISMAS preguntas (no generar nuevas)
+        if (preguntasActuales && preguntasActuales.length > 0) {
+          preguntasPorSeccion['simulacro_iar'] = preguntasActuales;
+        } else {
+          // Fallback: si por algún motivo no hay preguntas en memoria, generar nuevas
+          var items = generarNuevasPreguntasSimulacroIAR();
+          if (items && items.length > 0) {
+            preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
+          }
+        }
+        generarCuestionario('simulacro_iar');
+        window.scrollTo(0, 0);
+      },
+      null,
+      { labelAceptar: '🔄 REINICIAR', labelCancelar: 'CANCELAR', colorAceptar: '#d97706' }
+    );
+  };
+
+  // Diálogo de opciones al terminar simulacro_iar
+  document.addEventListener('DOMContentLoaded', function() {
+    window.mostrarPuntuacionTotal = function(seccionId) {
+      mostrarResultadoFinal(seccionId);
+      if (seccionId !== 'simulacro_iar') return;
+      // Mostrar diálogo de opciones tras ver la puntuación
+      setTimeout(function() {
+        var dlg = document.createElement('div');
+        dlg.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
+        dlg.innerHTML = '<div style="background:#fff;border-radius:14px;padding:32px 28px;max-width:400px;width:90%;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,0.25);">' +
+          '<div style="font-size:1.3rem;font-weight:800;color:#1e3a8a;margin-bottom:12px;">🎓 ¡Simulacro completado!</div>' +
+          '<p style="color:#475569;margin-bottom:24px;font-size:.95rem;">¿Qué querés hacer ahora?</p>' +
+          '<div style="display:flex;flex-direction:column;gap:10px;">' +
+          '<button id="sim-dlg-salir" style="padding:12px;background:linear-gradient(135deg,#64748b,#475569);color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;">🏠 Salir al menú principal</button>' +
+          '<button id="sim-dlg-reiniciar" style="padding:12px;background:linear-gradient(135deg,#059669,#047857);color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;">🔄 Reiniciar este simulacro</button>' +
+          '<button id="sim-dlg-nuevo" style="padding:12px;background:linear-gradient(135deg,#1e3a8a,#1e40af);color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;">🎲 Crear nuevo simulacro</button>' +
+          '</div></div>';
+        document.body.appendChild(dlg);
+        document.getElementById('sim-dlg-salir').onclick = function() {
+          dlg.remove();
+          _limpiarSimulacroIARSinProgreso();
+          window.location.href = 'https://examenesiar.github.io/#menu';
+        };
+        document.getElementById('sim-dlg-reiniciar').onclick = function() {
+          dlg.remove();
+          // Guardar las preguntas actuales ANTES de limpiar el estado
+          var preguntasActuales = preguntasPorSeccion['simulacro_iar']
+            ? preguntasPorSeccion['simulacro_iar'].slice()
+            : null;
+          delete state['simulacro_iar'];
+          saveJSON(STORAGE_KEY, state);
+          // Borrar en Firestore para evitar restauración de progreso viejo
+          _borrarSeccionFirestore('simulacro_iar');
+          if (window.puntajesPorSeccion) delete window.puntajesPorSeccion['simulacro_iar'];
+          var rt = document.getElementById('resultado-total-simulacro_iar');
+          if (rt) { rt.textContent = ''; rt.className = 'resultado-final'; }
+          // Restaurar las MISMAS preguntas
+          if (preguntasActuales && preguntasActuales.length > 0) {
+            preguntasPorSeccion['simulacro_iar'] = preguntasActuales;
+          }
+          generarCuestionario('simulacro_iar');
+          window.scrollTo(0, 0);
+        };
+        document.getElementById('sim-dlg-nuevo').onclick = function() {
+          dlg.remove();
+          _limpiarSimulacroIARSinProgreso();
+          var items = generarNuevasPreguntasSimulacroIAR();
+          preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
+          generarCuestionario('simulacro_iar');
+          window.scrollTo(0, 0);
+        };
+      }, 400);
+    };
+  });
+
+  function mostrarDialogoConfirmacion(titulo, mensaje, onAceptar, onCancelar, optsExtra) {
+    // optsExtra (opcional): { labelAceptar, labelCancelar, colorAceptar }
+    var opts = optsExtra || {};
+    var labelAceptar  = opts.labelAceptar  || 'Aceptar';
+    var labelCancelar = opts.labelCancelar || 'Cancelar';
+    var colorAceptar  = opts.colorAceptar  || '#28a745';
+
+    // Crear overlay
+    const overlay = document.createElement('div');
+    overlay.style.position = 'fixed';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    overlay.style.zIndex = '9999';
+    overlay.style.display = 'flex';
+    overlay.style.justifyContent = 'center';
+    overlay.style.alignItems = 'center';
+    
+    // Crear diálogo
+    const dialogo = document.createElement('div');
+    dialogo.style.backgroundColor = 'white';
+    dialogo.style.padding = '30px';
+    dialogo.style.borderRadius = '10px';
+    dialogo.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+    dialogo.style.maxWidth = '450px';
+    dialogo.style.width = '90%';
+    dialogo.style.textAlign = 'center';
+    
+    const tituloEl = document.createElement('h3');
+    tituloEl.textContent = titulo;
+    tituloEl.style.marginBottom = '15px';
+    tituloEl.style.color = '#333';
+    tituloEl.style.fontSize = '1.3rem';
+    
+    const mensajeEl = document.createElement('p');
+    // Respetar saltos de línea en el mensaje
+    mensajeEl.style.whiteSpace = 'pre-line';
+    mensajeEl.textContent = mensaje;
+    mensajeEl.style.marginBottom = '25px';
+    mensajeEl.style.color = '#666';
+    mensajeEl.style.lineHeight = '1.6';
+    mensajeEl.style.textAlign = 'left';
+    
+    const botonesDiv = document.createElement('div');
+    botonesDiv.style.display = 'flex';
+    botonesDiv.style.gap = '10px';
+    botonesDiv.style.justifyContent = 'center';
+    botonesDiv.style.flexWrap = 'wrap';
+    
+    // Botón Cancelar (va primero, según módulo 7)
+    const btnCancelar = document.createElement('button');
+    btnCancelar.textContent = labelCancelar;
+    btnCancelar.className = 'btn-responder';
+    btnCancelar.style.minWidth = '120px';
+    btnCancelar.style.backgroundColor = '#6c757d';
+    btnCancelar.onclick = function() {
+      document.body.removeChild(overlay);
+      if (onCancelar) onCancelar();
+    };
+
+    // Botón Aceptar (va segundo, según módulo 7)
+    const btnAceptar = document.createElement('button');
+    btnAceptar.textContent = labelAceptar;
+    btnAceptar.className = 'btn-responder';
+    btnAceptar.style.minWidth = '120px';
+    btnAceptar.style.backgroundColor = colorAceptar;
+    btnAceptar.onclick = function() {
+      document.body.removeChild(overlay);
+      if (onAceptar) onAceptar();
+    };
+    
+    botonesDiv.appendChild(btnCancelar);
+    botonesDiv.appendChild(btnAceptar);
+    
+    dialogo.appendChild(tituloEl);
+    dialogo.appendChild(mensajeEl);
+    dialogo.appendChild(botonesDiv);
+    overlay.appendChild(dialogo);
+    document.body.appendChild(overlay);
+  }
+  
+
+})();
+/* ======================================================
+   BUSCADOR DE PREGUNTAS
+   ====================================================== */
+
+(function () {
+
+    var BUSCADOR_KEY = 'buscador_ultimo_query_v1';
+
+    var NOMBRES_EXAMENES = {
+        iarsep2020:'SEP 2020',iaroct2020:'OCT 2020',iarnov2020:'NOV 2020',iardic2020:'DIC 2020',
+        iarfeb2021:'FEB 2021',iarmar2021:'MAR 2021',iarabr2021:'ABR 2021',iarmay2021:'MAY 2021',
+        iarjun2021:'JUN 2021',iarago2021:'AGO 2021',iarsep2021:'SEP 2021',iarnov2021:'NOV 2021',iardic2021:'DIC 2021',
+        iarmar2022:'MAR 2022',iarabr2022:'ABR 2022',iarjun2022:'JUN 2022',iarago2022:'AGO 2022',
+        iaroct2022:'OCT 2022',iardic2022:'DIC 2022',
+        iarmar2023:'MAR 2023',iarabr2023:'ABR 2023',iarmay2023:'MAY 2023',iarjun2023:'JUN 2023',
+        iarago2023:'AGO 2023',iaroct2023:'OCT 2023',iardic2023:'DIC 2023',
+        iarmar2024:'MAR 2024',iarabr2024:'ABR 2024',iarmay2024:'MAY 2024',
+        iarjun2024:'JUN 2024',iarago2024:'AGO 2024',iarsep2024:'SEP 2024',iaroct2024:'OCT 2024',
+        iarnov2024:'NOV 2024',iardic2024:'DIC 2024',
+        iarfeb2025:'FEB 2025',iarmar2025:'MAR 2025',iarabr2025:'ABR 2025',
+        iarjun2025:'JUN 2025',iarsep2025:'SEP 2025',iaroct2025:'OCT 2025',
+        iarnov2025:'NOV 2025',iardic2025:'DIC 2025',
+        iarfeb2026:'FEB 2026',simulacro_iar:'SIMULACRO IAR'
+    };
+
+    function nombreExamen(id) { return NOMBRES_EXAMENES[id] || id.toUpperCase(); }
+
+    // Normaliza tildes/acentos para búsqueda sin distinción
+    function normalizarTexto(str) {
+        if (!str) return '';
+        return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    }
+
+    function escaparRegex(str) { return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+    function escapeHtml(str) {
+        return String(str)
+            .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+            .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function resaltarTexto(texto, termino) {
+        if (!termino) return escapeHtml(texto);
+        // Construir regex que matchee con o sin tildes
+        var terminoNorm = normalizarTexto(termino);
+        // Buscar posiciones en el texto original comparando normalizado
+        var textoNorm = normalizarTexto(texto);
+        var result = '';
+        var i = 0;
+        var lenT = terminoNorm.length;
+        while (i < texto.length) {
+            if (textoNorm.substr(i, lenT) === terminoNorm) {
+                result += '<mark>' + escapeHtml(texto.substr(i, lenT)) + '</mark>';
+                i += lenT;
+            } else {
+                result += escapeHtml(texto[i]);
+                i++;
+            }
+        }
+        return result;
+    }
+
+    function truncar(texto, maxLen) {
+        if (!texto) return '';
+        return texto.length <= maxLen ? texto : texto.substring(0, maxLen) + '\u2026';
+    }
+
+    // Usa el sistema de clases del app (oculto / activa), NO style.display
+    function ocultarTodo() {
+        document.getElementById('menu-principal')?.classList.add('oculto');
+        document.querySelectorAll('.menu-principal[id$="-submenu"]').forEach(s => s.style.display = 'none');
+        document.querySelectorAll('.pagina-cuestionario').forEach(p => p.classList.remove('activa'));
+        var pb = document.getElementById('buscador-preguntas');
+        if (pb) pb.classList.add('oculto');
+    }
+
+    // ── Abrir buscador ──
+    window.mostrarBuscador = function () {
+        // Ocultar botón flotante de progreso en el buscador
+        var _btnFB = document.getElementById("btn-ver-progreso");
+        if (_btnFB) _btnFB.style.display = "none";
+        var _panFB = document.getElementById("panel-progreso");
+        if (_panFB) _panFB.style.display = "none";
+        ocultarTodo();
+        var panel = document.getElementById('buscador-preguntas');
+        if (panel) panel.classList.remove('oculto');
+
+        renderNavBar();
+
+        var q = '';
+        try { q = localStorage.getItem(BUSCADOR_KEY) || ''; } catch(e) {}
+        var inp = document.getElementById('buscador-input');
+        if (inp) { inp.value = q; setTimeout(function(){ inp.focus(); }, 100); }
+        if (q.length >= 2) realizarBusqueda(q);
+    };
+
+    // ── Limpiar búsqueda ──
+    window.limpiarBusqueda = function () {
+        var inp = document.getElementById('buscador-input');
+        if (inp) { inp.value = ''; inp.focus(); }
+        document.getElementById('buscador-resultados').innerHTML = '';
+        document.getElementById('buscador-stats').style.display = 'none';
+        try { localStorage.removeItem(BUSCADOR_KEY); } catch(e) {}
+    };
+
+    // ── Ir a una pregunta desde el buscador ──
+    window.irAPreguntaDesdeBuscador = function (seccionId, originalIdx) {
+        // Verificar restricción demo usando el flag global
+        if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
+            !window._demoSeccionesPermitidas.includes(seccionId)) {
+            if (typeof window.mostrarModalRestriccionDemo === 'function') {
+              window.mostrarModalRestriccionDemo();
+            } else {
+              var overlay = document.getElementById('demo-restriccion-overlay');
+              if (overlay) overlay.style.display = 'flex';
+            }
+            return;
+        }
+        try { sessionStorage.setItem('buscador_origen', '1'); } catch(e) {}
+        // Marcar origen de navegación como buscador
+        if (typeof navegacionOrigen !== 'undefined') navegacionOrigen = 'buscador';
+
+        // Guardar posición de scroll ACTUAL y el card exacto antes de navegar
+        try {
+            localStorage.setItem('buscador_scroll_pos', String(window.pageYOffset || document.documentElement.scrollTop));
+            localStorage.setItem('buscador_last_card', seccionId + '_' + originalIdx);
+        } catch(e) {}
+
+        // Marcar esta tarjeta como visitada
+        var visitKey = 'buscador_visited_v1';
+        var visited = {};
+        try { visited = JSON.parse(localStorage.getItem(visitKey) || '{}'); } catch(e) {}
+        var cardId = seccionId + '_' + originalIdx;
+        visited[cardId] = true;
+        try { localStorage.setItem(visitKey, JSON.stringify(visited)); } catch(e) {}
+
+        // Aplicar estilo visitado a las tarjetas correspondientes de inmediato
+        document.querySelectorAll('[data-buscador-card-id="' + cardId + '"]').forEach(function(el) {
+            el.classList.add('buscador-card-visitada');
+        });
+
+        // Capturar query antes de navegar
+        var queryActual = '';
+        try { queryActual = localStorage.getItem(BUSCADOR_KEY) || ''; } catch(e) {}
+        var inputEl = document.getElementById('buscador-input');
+        if (inputEl && inputEl.value.trim().length >= 2) queryActual = inputEl.value.trim();
+
+        // Indicar al modo OAV (una-por-una) qué pregunta mostrar y cuál es el query
+        // script_onebyone.js lee esto en renderOAV() antes de decidir currentIdx
+        window._buscadorTargetIdx = originalIdx;
+        window._buscadorQueryPendiente = queryActual;
+
+        // Callback para modo TODO-A-LA-VEZ: se ejecuta cuando generarCuestionario termina
+        // En modo OAV este callback no se llama (renderOAV usa _buscadorTargetIdx directamente)
+        function _scrollAPregunta() {
+            var bloque = document.getElementById('pregunta-bloque-' + seccionId + '-' + originalIdx);
+            if (!bloque) {
+                // Modo OAV: la pregunta se muestra directamente, hacer scroll al tope
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+                return;
+            }
+            // Modo todo-a-la-vez: scroll a la pregunta exacta con resaltado
+            requestAnimationFrame(function() {
+                bloque.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                bloque.classList.add('buscador-highlight');
+                _resaltarTextoBuscado(bloque, queryActual);
+                setTimeout(function () { bloque.classList.remove('buscador-highlight'); }, 2500);
+            });
+        }
+
+        // Depositar callback ANTES de llamar showSection
+        window._buscadorPendienteScroll = _scrollAPregunta;
+
+        // Usar showSection del sistema original (maneja currentSection y generarCuestionario)
+        if (typeof showSection === 'function') {
+            showSection(seccionId);
+        } else {
+            // Fallback manual
+            window._buscadorPendienteScroll = null;
+            window._buscadorTargetIdx = null;
+            ocultarTodo();
+            var pagina = document.getElementById(seccionId);
+            if (!pagina) return;
+            pagina.classList.add('activa');
+            if (typeof generarCuestionario === 'function') generarCuestionario(seccionId, _scrollAPregunta);
+        }
+
+        // Mostrar botón flotante
+        var btn = document.getElementById('btn-volver-buscador');
+        if (btn) btn.style.display = 'flex';
+    };
+
+    // ── Resaltar texto buscado en amarillo dentro del bloque ──
+    function _resaltarTextoBuscado(bloque, query) {
+        if (!query || query.length < 2) return;
+        // Limpiar highlights anteriores en toda la sección
+        var pagina = bloque.closest('.pagina-cuestionario');
+        if (pagina) {
+            pagina.querySelectorAll('.buscador-texto-highlight').forEach(function(el) {
+                var parent = el.parentNode;
+                parent.replaceChild(document.createTextNode(el.textContent), el);
+                parent.normalize();
+            });
+        }
+        var queryLower = normalizarTexto(query);
+        // Recorrer todos los nodos de texto dentro del bloque
+        var walker = document.createTreeWalker(bloque, NodeFilter.SHOW_TEXT, null, false);
+        var nodos = [];
+        var node;
+        while ((node = walker.nextNode())) nodos.push(node);
+        nodos.forEach(function(textNode) {
+            var text = textNode.textContent;
+            var textNorm = normalizarTexto(text);
+            var idx = textNorm.indexOf(queryLower);
+            if (idx === -1) return;
+            // Reconstruir el nodo con el tramo resaltado
+            var frag = document.createDocumentFragment();
+            var lastIdx = 0;
+            while (idx !== -1) {
+                frag.appendChild(document.createTextNode(text.substring(lastIdx, idx)));
+                var mark = document.createElement('mark');
+                mark.className = 'buscador-texto-highlight';
+                mark.textContent = text.substring(idx, idx + queryLower.length);
+                frag.appendChild(mark);
+                lastIdx = idx + queryLower.length;
+                idx = textNorm.indexOf(queryLower, lastIdx);
+            }
+            frag.appendChild(document.createTextNode(text.substring(lastIdx)));
+            textNode.parentNode.replaceChild(frag, textNode);
+        });
+    }
+
+    // ── Volver al buscador conservando la búsqueda y posición de scroll ──
+    window.volverAlBuscador = function () {
+        try { sessionStorage.removeItem('buscador_origen'); } catch(e) {}
+        if (typeof navegacionOrigen !== 'undefined') navegacionOrigen = null;
+        var btn = document.getElementById('btn-volver-buscador');
+        if (btn) btn.style.display = 'none';
+
+        ocultarTodo();
+        var panel = document.getElementById('buscador-preguntas');
+        if (panel) panel.classList.remove('oculto');
+
+        renderNavBar();
+
+        var q = '';
+        try { q = localStorage.getItem(BUSCADOR_KEY) || ''; } catch(e) {}
+        var inp = document.getElementById('buscador-input');
+        if (inp) inp.value = q;
+
+        // Obtener el card al que se fue antes de buscar (puede cambiar después del render)
+        var savedScrollBuscador = 0;
+        var lastCard = '';
+        try {
+            savedScrollBuscador = parseInt(localStorage.getItem('buscador_scroll_pos') || '0', 10);
+            lastCard = localStorage.getItem('buscador_last_card') || '';
+        } catch(e) {}
+
+        // Función que intenta hacer scroll al card, con reintentos
+        function _scrollAlCard(cardId, intentos) {
+            var cardEl = cardId ? document.querySelector('[data-buscador-card-id="' + cardId + '"]') : null;
+            if (cardEl) {
+                cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                cardEl.style.transition = 'box-shadow .3s, outline .3s';
+                cardEl.style.outline = '3px solid #0891b2';
+                cardEl.style.boxShadow = '0 0 0 5px rgba(8,145,178,0.18)';
+                setTimeout(function() {
+                    cardEl.style.outline = '';
+                    cardEl.style.boxShadow = '';
+                }, 2200);
+            } else if (intentos > 0) {
+                // Aún no está en el DOM, reintentar
+                setTimeout(function() { _scrollAlCard(cardId, intentos - 1); }, 150);
+            } else {
+                // Fallback: scroll numérico
+                window.scrollTo({ top: savedScrollBuscador, behavior: 'smooth' });
+            }
+        }
+
+        if (q.length >= 2) {
+            // Ejecutar búsqueda; cuando termine el DOM se actualiza y entonces hacemos scroll
+            realizarBusqueda(q);
+            // Usar MutationObserver para detectar cuando se rendericen los cards
+            var resDiv = document.getElementById('buscador-resultados');
+            if (resDiv && lastCard) {
+                var intentosDirect = 0;
+                var observerTimeout = null;
+                var obs = new MutationObserver(function(mutations) {
+                    intentosDirect++;
+                    var cardEl = document.querySelector('[data-buscador-card-id="' + lastCard + '"]');
+                    if (cardEl || intentosDirect > 20) {
+                        obs.disconnect();
+                        if (observerTimeout) clearTimeout(observerTimeout);
+                        _scrollAlCard(lastCard, 0);
+                    }
+                });
+                obs.observe(resDiv, { childList: true, subtree: true });
+                // Seguridad: si en 3s no encontró nada, cancelar observer y hacer scroll numérico
+                observerTimeout = setTimeout(function() {
+                    obs.disconnect();
+                    _scrollAlCard(lastCard, 3);
+                }, 3000);
+            }
+        } else {
+            // Sin query: fallback scroll
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    window.scrollTo({ top: savedScrollBuscador, behavior: 'smooth' });
+                });
+            });
+        }
+    };
+
+    // ── Buscar y renderizar resultados ──
+    window.realizarBusqueda = function (query) {
+        query = (query || '').trim();
+        var resDiv = document.getElementById('buscador-resultados');
+        var statsDiv = document.getElementById('buscador-stats');
+
+        // Guardar query en localStorage
+        try {
+            if (query.length >= 2) localStorage.setItem(BUSCADOR_KEY, query);
+            else localStorage.removeItem(BUSCADOR_KEY);
+        } catch(e) {}
+
+        if (query.length < 2) { resDiv.innerHTML = ''; statsDiv.style.display = 'none'; return; }
+
+        if (typeof preguntasPorSeccion === 'undefined') {
+            resDiv.innerHTML = '<div class="buscador-vacio"><div class="buscador-vacio-icon">\u26a0\ufe0f</div>No se encontr\u00f3 la base de preguntas.</div>';
+            return;
+        }
+
+        var TODAS_SECCIONES = [
+            'iarsep2020','iaroct2020','iarnov2020','iardic2020',
+            'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
+            'iarmar2022','iarabr2022','iarjun2022','iarago2022','iaroct2022','iardic2022',
+            'iarmar2023','iarabr2023','iarmay2023','iarjun2023','iarago2023','iaroct2023','iardic2023',
+            'iarmar2024','iarabr2024','iarmay2024','iarjun2024','iarago2024','iarsep2024','iaroct2024','iarnov2024','iardic2024',
+            'iarfeb2025','iarmar2025','iarabr2025','iarjun2025','iarsep2025','iaroct2025','iarnov2025','iardic2025',
+            'iarfeb2026'
+        ];
+
+        // Detectar cuáles secciones faltan cargar
+        var seccionesFaltantes = TODAS_SECCIONES.filter(function(sid) {
+            return !Array.isArray(preguntasPorSeccion[sid]) || preguntasPorSeccion[sid].length === 0;
+        });
+
+        if (seccionesFaltantes.length > 0 && window.cargarSeccionFirestore) {
+            resDiv.innerHTML = '<div class="buscador-vacio"><div class="buscador-vacio-icon">⏳</div>Cargando base de preguntas para buscar (' + (TODAS_SECCIONES.length - seccionesFaltantes.length) + '/' + TODAS_SECCIONES.length + ')...</div>';
+            statsDiv.style.display = 'none';
+
+            // Cargar todas las faltantes en paralelo
+            Promise.all(seccionesFaltantes.map(function(sid) {
+                return window.cargarSeccionFirestore(sid).then(function(pregs) {
+                    if (pregs) preguntasPorSeccion[sid] = pregs;
+                    // Si falla (usuario demo sin permiso), simplemente no se carga
+                }).catch(function() {});
+            })).then(function() {
+                _ejecutarBusqueda(query, resDiv, statsDiv);
+            });
+            return;
+        }
+
+        _ejecutarBusqueda(query, resDiv, statsDiv);
+    };
+
+    function _ejecutarBusqueda(query, resDiv, statsDiv) {
+        var queryNorm = normalizarTexto(query);
+        var resE = [], resO = [];
+
+        // Orden cronológico de secciones (de más viejo a más nuevo)
+        var ORDEN_SECCIONES = [
+            'iarsep2020','iaroct2020','iarnov2020','iardic2020',
+            'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
+            'iarmar2022','iarabr2022','iarjun2022','iarago2022','iaroct2022','iardic2022',
+            'iarmar2023','iarabr2023','iarmay2023','iarjun2023','iarago2023','iaroct2023','iardic2023',
+            'iarmar2024','iarabr2024','iarmay2024','iarjun2024','iarago2024','iarsep2024','iaroct2024','iarnov2024','iardic2024',
+            'iarfeb2025','iarmar2025','iarabr2025','iarjun2025','iarsep2025','iaroct2025','iarnov2025','iardic2025',
+            'iarfeb2026'
+        ];
+
+        Object.keys(preguntasPorSeccion).forEach(function (sid) {
+            var preguntas = preguntasPorSeccion[sid];
+            if (!Array.isArray(preguntas)) return;
+            var examen = nombreExamen(sid);
+            preguntas.forEach(function (preg, idx) {
+                if (preg.pregunta && normalizarTexto(preg.pregunta).includes(queryNorm)) {
+                    resE.push({ sid:sid, idx:idx, examen:examen, num:idx+1, texto:preg.pregunta });
+                }
+                if (Array.isArray(preg.opciones)) {
+                    preg.opciones.forEach(function (opc, oi) {
+                        if (normalizarTexto(opc).includes(queryNorm)) {
+                            resO.push({ sid:sid, idx:idx, examen:examen, num:idx+1,
+                                letra:String.fromCharCode(65+oi), texto:opc, enunciado:preg.pregunta });
+                        }
+                    });
+                }
+            });
+        });
+
+        // Ordenar de más reciente a más antigua usando ORDEN_SECCIONES como referencia
+        function sortDesc(a, b) {
+            var ia = ORDEN_SECCIONES.indexOf(a.sid);
+            var ib = ORDEN_SECCIONES.indexOf(b.sid);
+            // Secciones no reconocidas (simulacro, etc.) van al final
+            if (ia === -1) ia = 9999;
+            if (ib === -1) ib = 9999;
+            return ib - ia;
+        }
+        resE.sort(sortDesc);
+        resO.sort(sortDesc);
+
+        var total = resE.length + resO.length;
+        statsDiv.style.display = 'block';
+        statsDiv.textContent = total === 0
+            ? 'No se encontraron resultados para "' + query + '"'
+            : total + ' resultado' + (total!==1?'s':'') + ' encontrado' + (total!==1?'s':'') +
+              ' (' + resE.length + ' en enunciados \u00b7 ' + resO.length + ' en opciones)' +
+              '  \u2014  Hac\u00e9 clic en una tarjeta para ir a la pregunta';
+
+        if (total === 0) {
+            resDiv.innerHTML = '<div class="buscador-vacio"><div class="buscador-vacio-icon">\ud83d\udd0d</div>' +
+                'No se encontraron resultados con <strong>"' + escapeHtml(query) + '"</strong></div>';
+            return;
+        }
+
+        var html = '';
+
+        // Cargar visitadas para aplicar estilo
+        var visited = {};
+        try { visited = JSON.parse(localStorage.getItem('buscador_visited_v1') || '{}'); } catch(e) {}
+
+        function _esBloqueadaDemo(sid) {
+            return window._demoCheckEnabled && window._demoSeccionesPermitidas &&
+                   !window._demoSeccionesPermitidas.includes(sid);
+        }
+
+        if (resE.length > 0) {
+            html += '<div class="buscador-grupo-titulo enunciado">\ud83d\udcc4 Encontrado en Enunciados (' + resE.length + ')</div>';
+            resE.forEach(function(r) {
+                var cardId = r.sid + '_' + r.idx;
+                var bloqueada = _esBloqueadaDemo(r.sid);
+                var visitadaClass = (!bloqueada && visited[cardId]) ? ' buscador-card-visitada' : '';
+                var demoClass = bloqueada ? ' buscador-card-demo-restringida' : '';
+                html += '<div class="buscador-card tipo-enunciado' + visitadaClass + demoClass + '" data-buscador-card-id="' + cardId + '" onclick="irAPreguntaDesdeBuscador(\'' + r.sid + '\',' + r.idx + ')" title="Ir a esta pregunta">' +
+                    '<div class="buscador-card-meta">' +
+                        '<span class="badge-tipo enunciado">Enunciado</span>' +
+                        '<span class="badge-examen">IAR ' + escapeHtml(r.examen) + '</span>' +
+                        '<span class="badge-pregunta">Pregunta N\u00b0 ' + r.num + '</span>' +
+                        (!bloqueada && visited[cardId] ? '<span class="badge-visitada">\u2713 Visitada</span>' : '') +
+                        (bloqueada ? '<span class="badge-demo-lock">\ud83d\udd12 Solo DEMO</span>' : '') +
+                        (!bloqueada ? '<span class="badge-ir">\u2192 Ir a la pregunta</span>' : '') +
+                    '</div>' +
+                    '<div class="buscador-card-texto">' + resaltarTexto(truncar(r.texto, 280), query) + '</div>' +
+                '</div>';
+            });
+        }
+
+        if (resO.length > 0) {
+            html += '<div class="buscador-grupo-titulo opcion">\ud83d\udd18 Encontrado en Opciones (' + resO.length + ')</div>';
+            resO.forEach(function(r) {
+                var enunciadoCorto = truncar(r.enunciado || '', 200);
+                var cardId = r.sid + '_' + r.idx;
+                var bloqueada = _esBloqueadaDemo(r.sid);
+                var visitadaClass = (!bloqueada && visited[cardId]) ? ' buscador-card-visitada' : '';
+                var demoClass = bloqueada ? ' buscador-card-demo-restringida' : '';
+                html += '<div class="buscador-card tipo-opcion' + visitadaClass + demoClass + '" data-buscador-card-id="' + cardId + '" onclick="irAPreguntaDesdeBuscador(\'' + r.sid + '\',' + r.idx + ')" title="Ir a esta pregunta">' +
+                    '<div class="buscador-card-meta">' +
+                        '<span class="badge-tipo opcion">Opci\u00f3n</span>' +
+                        '<span class="badge-examen">IAR ' + escapeHtml(r.examen) + '</span>' +
+                        '<span class="badge-pregunta">Pregunta N\u00b0 ' + r.num + '</span>' +
+                        (!bloqueada && visited[cardId] ? '<span class="badge-visitada">\u2713 Visitada</span>' : '') +
+                        (bloqueada ? '<span class="badge-demo-lock">\ud83d\udd12 Solo DEMO</span>' : '') +
+                        (!bloqueada ? '<span class="badge-ir">\u2192 Ir a la pregunta</span>' : '') +
+                    '</div>' +
+                    '<div class="buscador-card-texto">' + resaltarTexto(r.texto, query) + '</div>' +
+                    (enunciadoCorto ? '<div class="buscador-card-enunciado-ref">\ud83d\udccb Enunciado: ' + escapeHtml(enunciadoCorto) + '</div>' : '') +
+                '</div>';
+            });
+        }
+
+        // Si es usuario demo, mostrar aviso de contenido adicional bloqueado
+        if (window._demoCheckEnabled && window._demoSeccionesPermitidas) {
+            var seccionesNoDisponibles = ORDEN_SECCIONES.filter(function(sid) {
+                return !window._demoSeccionesPermitidas.includes(sid) &&
+                       (!Array.isArray(preguntasPorSeccion[sid]) || preguntasPorSeccion[sid].length === 0);
+            });
+            if (seccionesNoDisponibles.length > 0) {
+                html += '<div class="buscador-demo-aviso">' +
+                    '🔒 Hay <strong>' + seccionesNoDisponibles.length + ' exámenes adicionales</strong> con resultados bloqueados. ' +
+                    'Accedé al plan completo para buscar en toda la base de preguntas.' +
+                    '</div>';
+            }
+        }
+
+        resDiv.innerHTML = html;
+    } // fin _ejecutarBusqueda
+
+})();
+
+/* ============================================================
+   TIMER SIMULACRO IAR — 1 hora 30 minutos
+   - Solo activo en seccion simulacro_iar
+   - Notificaciones toast a los 30, 15, 5, 1 minuto restantes
+   - Al expirar: califica todas las pendientes y muestra resultado
+   ============================================================ */
+(function () {
+
+  var SIMULACRO_TIMER_KEY  = 'simulacro_iar_timer_end_v1'; // timestamp ISO de fin
+  var SIMULACRO_DURACION_MS = 90 * 60 * 1000; // 1h 30min en ms
+
+  var _timerId       = null;  // setInterval del reloj
+  var _toastTimeouts = [];    // setTimeout de toasts programados
+  var _timerActivo   = false;
+
+  // ── Inyectar estilos CSS una sola vez ──────────────────────────────
+  function _inyectarCSS() {
+    if (document.getElementById('sim-timer-styles')) return;
+    var style = document.createElement('style');
+    style.id = 'sim-timer-styles';
+    style.textContent = [
+      /* ── Reloj flotante ── */
+      '#sim-timer-widget{',
+        'position:fixed;top:16px;right:16px;z-index:10000;',
+        'display:flex;align-items:center;gap:8px;',
+        'background:rgba(15,23,42,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);',
+        'border:1px solid rgba(255,255,255,0.12);border-radius:40px;',
+        'padding:8px 16px 8px 12px;',
+        'box-shadow:0 8px 32px rgba(0,0,0,0.35),0 0 0 1px rgba(255,255,255,0.04);',
+        'font-family:"SF Mono","Fira Code","Consolas",monospace;',
+        'transition:all 0.4s cubic-bezier(.4,0,.2,1);',
+        'cursor:default;user-select:none;',
+      '}',
+      '#sim-timer-widget.urgente{',
+        'background:rgba(185,28,28,0.95);',
+        'border-color:rgba(254,202,202,0.3);',
+        'animation:sim-pulse-red 1s ease-in-out infinite;',
+      '}',
+      '#sim-timer-widget.advertencia{',
+        'background:rgba(120,53,15,0.95);',
+        'border-color:rgba(253,186,116,0.3);',
+      '}',
+      '#sim-timer-dot{',
+        'width:8px;height:8px;border-radius:50%;',
+        'background:#22c55e;flex-shrink:0;',
+        'box-shadow:0 0 6px #22c55e;',
+        'animation:sim-blink 2s ease-in-out infinite;',
+      '}',
+      '#sim-timer-widget.urgente #sim-timer-dot{background:#fca5a5;box-shadow:0 0 8px #fca5a5;}',
+      '#sim-timer-widget.advertencia #sim-timer-dot{background:#fb923c;box-shadow:0 0 6px #fb923c;}',
+      '#sim-timer-label{font-size:10px;color:rgba(255,255,255,0.45);letter-spacing:0.06em;text-transform:uppercase;}',
+      '#sim-timer-display{',
+        'font-size:1.05rem;font-weight:700;letter-spacing:0.04em;',
+        'color:#f8fafc;min-width:52px;text-align:center;',
+        'text-shadow:0 1px 4px rgba(0,0,0,0.4);',
+      '}',
+      /* ── Toast ── */
+      '.sim-toast{',
+        'position:fixed;left:50%;transform:translateX(-50%) translateY(-24px);',
+        'z-index:10100;',
+        'display:flex;align-items:center;gap:12px;',
+        'padding:14px 22px;border-radius:14px;',
+        'box-shadow:0 16px 48px rgba(0,0,0,0.28),0 4px 12px rgba(0,0,0,0.18);',
+        'font-family:"Segoe UI","Helvetica Neue",Arial,sans-serif;',
+        'max-width:92vw;width:max-content;',
+        'opacity:0;',
+        'transition:opacity 0.45s cubic-bezier(.4,0,.2,1), transform 0.45s cubic-bezier(.4,0,.2,1);',
+        'pointer-events:none;',
+      '}',
+      '.sim-toast.visible{opacity:1;transform:translateX(-50%) translateY(0);}',
+      '.sim-toast-icon{font-size:1.5rem;line-height:1;flex-shrink:0;}',
+      '.sim-toast-body{display:flex;flex-direction:column;gap:2px;}',
+      '.sim-toast-titulo{font-size:.95rem;font-weight:700;line-height:1.3;}',
+      '.sim-toast-subtitulo{font-size:.8rem;opacity:0.82;line-height:1.4;}',
+      '.sim-toast.verde{background:linear-gradient(135deg,#14532d 0%,#166534 100%);color:#dcfce7;border:1px solid rgba(134,239,172,0.25);}',
+      '.sim-toast.amarillo{background:linear-gradient(135deg,#713f12 0%,#854d0e 100%);color:#fef9c3;border:1px solid rgba(253,224,71,0.25);}',
+      '.sim-toast.naranja{background:linear-gradient(135deg,#7c2d12 0%,#9a3412 100%);color:#ffedd5;border:1px solid rgba(253,186,116,0.25);}',
+      '.sim-toast.rojo{background:linear-gradient(135deg,#7f1d1d 0%,#991b1b 100%);color:#fee2e2;border:1px solid rgba(252,165,165,0.25);}',
+      /* ── Overlay tiempo agotado ── */
+      '#sim-timeout-overlay{',
+        'position:fixed;top:0;left:0;width:100%;height:100%;',
+        'background:rgba(0,0,0,0.72);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);',
+        'z-index:10200;display:flex;align-items:center;justify-content:center;',
+        'animation:sim-fadein 0.5s ease;',
+      '}',
+      '#sim-timeout-card{',
+        'background:#fff;border-radius:20px;padding:36px 32px;',
+        'max-width:440px;width:92vw;text-align:center;',
+        'box-shadow:0 32px 80px rgba(0,0,0,0.35);',
+        'animation:sim-slidein 0.5s cubic-bezier(.4,0,.2,1);',
+      '}',
+      /* ── Keyframes ── */
+      '@keyframes sim-blink{0%,100%{opacity:1}50%{opacity:.35}}',
+      '@keyframes sim-pulse-red{0%,100%{box-shadow:0 8px 32px rgba(0,0,0,0.35),0 0 0 0 rgba(239,68,68,0)}50%{box-shadow:0 8px 32px rgba(0,0,0,0.35),0 0 0 8px rgba(239,68,68,0.25)}}',
+      '@keyframes sim-fadein{from{opacity:0}to{opacity:1}}',
+      '@keyframes sim-slidein{from{transform:translateY(32px);opacity:0}to{transform:translateY(0);opacity:1}}',
+    ].join('');
+    document.head.appendChild(style);
+  }
+
+  // ── Crear / obtener el widget de reloj ────────────────────────────
+  function _crearWidget() {
+    if (document.getElementById('sim-timer-widget')) return;
+    var w = document.createElement('div');
+    w.id = 'sim-timer-widget';
+    w.innerHTML =
+      '<span id="sim-timer-dot"></span>' +
+      '<span id="sim-timer-label">TIEMPO</span>' +
+      '<span id="sim-timer-display">--:--</span>';
+    document.body.appendChild(w);
+  }
+
+  function _destruirWidget() {
+    var w = document.getElementById('sim-timer-widget');
+    if (w) w.remove();
+  }
+
+  function _actualizarWidget(msRestantes) {
+    var w = document.getElementById('sim-timer-widget');
+    var d = document.getElementById('sim-timer-display');
+    if (!w || !d) return;
+
+    var totalSeg  = Math.max(0, Math.ceil(msRestantes / 1000));
+    var horas     = Math.floor(totalSeg / 3600);
+    var minutos   = Math.floor((totalSeg % 3600) / 60);
+    var segundos  = totalSeg % 60;
+
+    var texto = horas > 0
+      ? horas + ':' + _z(minutos) + ':' + _z(segundos)
+      : _z(minutos) + ':' + _z(segundos);
+    d.textContent = texto;
+
+    // Cambiar color del widget según urgencia
+    w.classList.remove('urgente','advertencia');
+    if (msRestantes <= 60 * 1000)        w.classList.add('urgente');
+    else if (msRestantes <= 5 * 60 * 1000) w.classList.add('advertencia');
+  }
+
+  function _z(n) { return n < 10 ? '0' + n : '' + n; }
+
+  // ── Toast de aviso ────────────────────────────────────────────────
+  function _mostrarToast(color, icono, titulo, subtitulo) {
+    var toast = document.createElement('div');
+    toast.className = 'sim-toast ' + color;
+    // Calcular posición vertical: debajo del header si existe, sino 20px
+    var topPx = 20;
+    var header = document.querySelector('header, .header, nav, .navbar');
+    if (header) topPx = header.getBoundingClientRect().bottom + 12;
+    toast.style.top = topPx + 'px';
+    toast.innerHTML =
+      '<div class="sim-toast-icon">' + icono + '</div>' +
+      '<div class="sim-toast-body">' +
+        '<div class="sim-toast-titulo">' + titulo + '</div>' +
+        '<div class="sim-toast-subtitulo">' + subtitulo + '</div>' +
+      '</div>';
+    document.body.appendChild(toast);
+
+    // Animar entrada
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        toast.classList.add('visible');
+      });
+    });
+
+    // Duración visible: 6 segundos (legible sin ser molesto)
+    var duracion = 6000;
+    setTimeout(function() {
+      toast.classList.remove('visible');
+      setTimeout(function() { if (toast.parentNode) toast.remove(); }, 500);
+    }, duracion);
+  }
+
+  // ── Programar toasts según tiempo restante ────────────────────────
+  function _programarToasts(msRestantes) {
+    // Limpiar toasts anteriores si hubiera
+    _toastTimeouts.forEach(function(id) { clearTimeout(id); });
+    _toastTimeouts = [];
+
+    var alertas = [
+      {
+        en: 30 * 60 * 1000, // 30 min restantes
+        color: 'verde', icono: '⏱️',
+        titulo: 'Quedan 30 minutos',
+        subtitulo: 'Vas muy bien — seguí respondiendo con calma.'
+      },
+      {
+        en: 15 * 60 * 1000, // 15 min
+        color: 'amarillo', icono: '🕐',
+        titulo: 'Quedan 15 minutos',
+        subtitulo: 'Revisá las preguntas que te quedaron pendientes.'
+      },
+      {
+        en: 5 * 60 * 1000, // 5 min
+        color: 'naranja', icono: '⚠️',
+        titulo: '¡Solo 5 minutos!',
+        subtitulo: 'Intentá responder las preguntas que te faltan.'
+      },
+      {
+        en: 1 * 60 * 1000, // 1 min
+        color: 'rojo', icono: '🔴',
+        titulo: '¡Último minuto!',
+        subtitulo: 'El simulacro se cerrará automáticamente en 60 segundos.'
+      }
+    ];
+
+    alertas.forEach(function(alerta) {
+      var delay = msRestantes - alerta.en;
+      if (delay < 0) return; // ya pasó ese momento
+      var id = setTimeout(function() {
+        if (!_timerActivo) return;
+        _mostrarToast(alerta.color, alerta.icono, alerta.titulo, alerta.subtitulo);
+      }, delay);
+      _toastTimeouts.push(id);
+    });
+  }
+
+  // ── Forzar respuesta de todas las preguntas pendientes ────────────
+  function _finalizarSimulacroForzado() {
+    _timerActivo = false;
+    if (_timerId) { clearInterval(_timerId); _timerId = null; }
+    _toastTimeouts.forEach(function(id) { clearTimeout(id); });
+    _toastTimeouts = [];
+    _destruirWidget();
+    localStorage.removeItem(SIMULACRO_TIMER_KEY);
+
+    var preguntas = (typeof preguntasPorSeccion !== 'undefined')
+      ? (preguntasPorSeccion['simulacro_iar'] || [])
+      : [];
+
+    // Contar sin responder
+    var sinResponder = 0;
+    var s = (typeof state !== 'undefined') ? state['simulacro_iar'] : null;
+
+    preguntas.forEach(function(preg, idx) {
+      if (!s || !s.graded || !s.graded[idx]) {
+        sinResponder++;
+        // Marcar como incorrecta (sin respuesta)
+        if (!window.puntajesPorSeccion) window.puntajesPorSeccion = {};
+        if (!window.puntajesPorSeccion['simulacro_iar']) {
+          window.puntajesPorSeccion['simulacro_iar'] = Array(preguntas.length).fill(null);
+        }
+        if (window.puntajesPorSeccion['simulacro_iar'][idx] === null ||
+            window.puntajesPorSeccion['simulacro_iar'][idx] === undefined) {
+          window.puntajesPorSeccion['simulacro_iar'][idx] = 0;
+        }
+        // Marcar visualmente en el DOM
+        var puntajeElem = document.getElementById('puntaje-simulacro_iar-' + idx);
+        if (puntajeElem && puntajeElem.textContent === '') {
+          puntajeElem.textContent = '⏰ Sin responder (0)';
+          puntajeElem.style.color = '#94a3b8';
+        }
+        // Deshabilitar inputs
+        var inputs = Array.from(document.getElementsByName('preguntasimulacro_iar' + idx));
+        inputs.forEach(function(inp) { inp.disabled = true; });
+        var btn = inputs.length > 0 && inputs[0].closest
+          ? inputs[0].closest('.pregunta')?.querySelector('button.btn-responder')
+          : null;
+        if (btn) btn.disabled = true;
+        // Guardar en state
+        if (s) {
+          if (!s.graded) s.graded = {};
+          s.graded[idx] = true;
+          if (!s.answers) s.answers = {};
+          if (!s.answers[idx]) s.answers[idx] = [];
+        }
+      }
+    });
+
+    // Guardar estado
+    if (typeof saveJSON === 'function' && typeof state !== 'undefined' && state['simulacro_iar']) {
+      try { saveJSON('quiz_state_v3', state); } catch(e) {}
+    }
+
+    // Calcular puntaje total
+    var totalScore = 0;
+    if (window.puntajesPorSeccion && window.puntajesPorSeccion['simulacro_iar']) {
+      window.puntajesPorSeccion['simulacro_iar'].forEach(function(p) { totalScore += (p || 0); });
+    }
+
+    // Mostrar overlay de tiempo agotado
+    _mostrarOverlayTimeout(totalScore, preguntas.length, sinResponder);
+  }
+
+  // ── Overlay final de tiempo agotado ──────────────────────────────
+  function _mostrarOverlayTimeout(score, total, sinResponder) {
+    // Registrar intento si aún no se registró
+    if (typeof mostrarResultadoFinal === 'function') {
+      try { mostrarResultadoFinal('simulacro_iar'); } catch(e) {}
+    }
+
+    var overlay = document.createElement('div');
+    overlay.id = 'sim-timeout-overlay';
+
+    var pct = total > 0 ? Math.round((score / total) * 100) : 0;
+    var emoji = pct >= 70 ? '🎉' : pct >= 50 ? '👍' : '📚';
+    var colorScore = pct >= 70 ? '#15803d' : pct >= 50 ? '#b45309' : '#b91c1c';
+    var respondidas = total - sinResponder;
+
+    overlay.innerHTML =
+      '<div id="sim-timeout-card">' +
+        '<div style="font-size:2.4rem;margin-bottom:8px;">⏰</div>' +
+        '<div style="font-size:1.25rem;font-weight:800;color:#1e293b;margin-bottom:4px;">¡Tiempo agotado!</div>' +
+        '<div style="font-size:.88rem;color:#64748b;margin-bottom:24px;line-height:1.6;">' +
+          'El simulacro finalizó automáticamente al completarse 1 hora 30 minutos.' +
+        '</div>' +
+        '<div style="background:#f8fafc;border-radius:12px;padding:18px 20px;margin-bottom:20px;border:1px solid #e2e8f0;">' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;text-align:center;">' +
+            '<div>' +
+              '<div style="font-size:1.9rem;font-weight:800;color:' + colorScore + ';">' + score + '</div>' +
+              '<div style="font-size:.72rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-top:2px;">Correctas</div>' +
+            '</div>' +
+            '<div>' +
+              '<div style="font-size:1.9rem;font-weight:800;color:#334155;">' + total + '</div>' +
+              '<div style="font-size:.72rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-top:2px;">Total</div>' +
+            '</div>' +
+            '<div>' +
+              '<div style="font-size:1.9rem;font-weight:800;color:#64748b;">' + sinResponder + '</div>' +
+              '<div style="font-size:.72rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-top:2px;">Sin responder</div>' +
+            '</div>' +
+          '</div>' +
+          '<div style="margin-top:14px;padding-top:14px;border-top:1px solid #e2e8f0;font-size:.85rem;color:#475569;">' +
+            emoji + ' Respondiste <strong>' + respondidas + ' de ' + total + '</strong> preguntas &nbsp;·&nbsp; ' +
+            '<strong style="color:' + colorScore + ';">' + pct + '%</strong> de aciertos' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:9px;">' +
+          '<button id="sim-to-salir" style="padding:12px 18px;background:linear-gradient(135deg,#1e3a8a,#1e40af);color:#fff;border:none;border-radius:10px;font-size:.93rem;font-weight:600;cursor:pointer;letter-spacing:.02em;">🏠 Volver al menú principal</button>' +
+          '<button id="sim-to-reiniciar" style="padding:12px 18px;background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;border-radius:10px;font-size:.93rem;font-weight:600;cursor:pointer;">🔄 Reiniciar con las mismas preguntas</button>' +
+          '<button id="sim-to-nuevo" style="padding:12px 18px;background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;border-radius:10px;font-size:.93rem;font-weight:600;cursor:pointer;">🎲 Crear nuevo simulacro</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(overlay);
+
+    document.getElementById('sim-to-salir').onclick = function() {
+      overlay.remove();
+      if (typeof _limpiarSimulacroIARSinProgreso === 'function') _limpiarSimulacroIARSinProgreso();
+      window.location.href = 'https://examenesiar.github.io/#menu';
+    };
+
+    document.getElementById('sim-to-reiniciar').onclick = function() {
+      overlay.remove();
+      if (typeof window.reiniciarSimulacroIAR === 'function') window.reiniciarSimulacroIAR();
+    };
+
+    document.getElementById('sim-to-nuevo').onclick = function() {
+      overlay.remove();
+      if (typeof window.crearNuevoSimulacroIAR === 'function') window.crearNuevoSimulacroIAR();
+    };
+  }
+
+  // ── Arrancar el timer ─────────────────────────────────────────────
+  function iniciarTimer() {
+    if (_timerActivo) return;
+    _inyectarCSS();
+    _crearWidget();
+    _timerActivo = true;
+
+    // Calcular tiempo de fin (reutilizar si hay uno guardado en progreso)
+    var finGuardado = null;
+    try { finGuardado = localStorage.getItem(SIMULACRO_TIMER_KEY); } catch(e) {}
+    var finMs;
+    if (finGuardado) {
+      finMs = parseInt(finGuardado, 10);
+      // Si ya expiró mientras estaba fuera, finalizar de inmediato
+      if (finMs <= Date.now()) {
+        localStorage.removeItem(SIMULACRO_TIMER_KEY);
+        setTimeout(function() { _finalizarSimulacroForzado(); }, 300);
+        return;
+      }
+    } else {
+      finMs = Date.now() + SIMULACRO_DURACION_MS;
+      try { localStorage.setItem(SIMULACRO_TIMER_KEY, String(finMs)); } catch(e) {}
+    }
+
+    // Programar toasts desde el tiempo restante actual
+    _programarToasts(finMs - Date.now());
+
+    // Tick cada segundo
+    _timerId = setInterval(function() {
+      if (!_timerActivo) { clearInterval(_timerId); return; }
+      var restantes = finMs - Date.now();
+      _actualizarWidget(restantes);
+      if (restantes <= 0) {
+        clearInterval(_timerId);
+        _timerId = null;
+        _finalizarSimulacroForzado();
+      }
+    }, 1000);
+
+    // Mostrar display inicial sin esperar el primer segundo
+    _actualizarWidget(finMs - Date.now());
+  }
+
+  // ── Detener el timer (al salir del simulacro) ─────────────────────
+  function detenerTimer() {
+    _timerActivo = false;
+    if (_timerId) { clearInterval(_timerId); _timerId = null; }
+    _toastTimeouts.forEach(function(id) { clearTimeout(id); });
+    _toastTimeouts = [];
+    _destruirWidget();
+    // NO borrar SIMULACRO_TIMER_KEY — se necesita para restaurar si vuelve
+  }
+
+  // ── Limpiar timer definitivamente (al reiniciar o crear nuevo) ────
+  function limpiarTimer() {
+    detenerTimer();
+    try { localStorage.removeItem(SIMULACRO_TIMER_KEY); } catch(e) {}
+  }
+
+  // ── Exponer API pública ───────────────────────────────────────────
+  window._simulacroTimer = {
+    iniciar: iniciarTimer,
+    detener: detenerTimer,
+    limpiar: limpiarTimer
+  };
+
+  // ── Hooks: conectar con el ciclo de vida del simulacro ────────────
+  // Esperar a DOMContentLoaded y luego interceptar las funciones clave
+  function _hookearFunciones() {
+    // 1. Al generar el cuestionario del simulacro → arrancar el timer
+    var _origGenerarCuestionario = window.generarCuestionario;
+    // generarCuestionario es una función interna del IIFE — no está expuesta en window.
+    // En su lugar, hookeamos inicializarSimulacroIAR y crearNuevoSimulacroIAR.
+
+    // 2. Iniciar timer cuando se inicializa el simulacro
+    var _origInicializar = window.inicializarSimulacroIAR;
+    window.inicializarSimulacroIAR = function() {
+      if (typeof _origInicializar === 'function') _origInicializar.apply(this, arguments);
+      // Dar un pequeño margen para que el cuestionario se renderice
+      setTimeout(function() {
+        // Solo arrancar si la sección simulacro_iar está realmente visible (clase 'activa')
+        var simPage = document.getElementById('simulacro_iar');
+        if (simPage && simPage.classList.contains('activa')) {
+          iniciarTimer();
+        }
+        // Si no está activa, no iniciar — el hook de showSection lo hará al entrar
+      }, 600);
+    };
+
+    // Hookear showSection para detectar entrada/salida del simulacro
+    var _origShowSection = window.showSection;
+    window.showSection = function(seccionId) {
+      if (typeof _origShowSection === 'function') _origShowSection.apply(this, arguments);
+      if (seccionId === 'simulacro_iar') {
+        // Pequeño delay para que el render termine antes de mostrar el widget
+        setTimeout(iniciarTimer, 700);
+      } else {
+        // Salió del simulacro → limpiar timer completamente (resetear contador)
+        limpiarTimer();
+      }
+    };
+
+    // 3. Al salir al menú → limpiar timer SOLO si el usuario confirma la salida.
+    // IMPORTANTE: NO llamar limpiarTimer() antes del diálogo — si el usuario elige
+    // "No, seguir respondiendo", el timer ya habría sido destruido y el reloj desaparecería.
+    var _origVolverMenu = window.volverAlMenu;
+    window.volverAlMenu = function() {
+      // volverAlMenu llama a confirmarSalidaCuestionario internamente.
+      // Interceptamos el resultado: si el usuario confirma, showSection('menu') o showMenu()
+      // se encargará de limpiar via el hook de showSection (seccionId !== 'simulacro_iar').
+      // Solo necesitamos asegurarnos de no limpiar prematuramente aquí.
+      if (typeof _origVolverMenu === 'function') _origVolverMenu.apply(this, arguments);
+    };
+
+    var _origVolverSubmenu = window.volverAlSubmenu;
+    window.volverAlSubmenu = function() {
+      // Mismo razonamiento: no limpiar antes del diálogo de confirmación.
+      if (typeof _origVolverSubmenu === 'function') _origVolverSubmenu.apply(this, arguments);
+    };
+
+    // 4. Al reiniciar o crear nuevo → limpiar timer completamente y arrancar uno nuevo
+    var _origReiniciar = window.reiniciarSimulacroIAR;
+    window.reiniciarSimulacroIAR = function() {
+      limpiarTimer();
+      if (typeof _origReiniciar === 'function') _origReiniciar.apply(this, arguments);
+      // Arrancar nuevo timer después de que el diálogo confirme y el cuestionario se regenere
+      // (el botón Aceptar del diálogo tarda ~400ms en renderizar el cuestionario)
+      setTimeout(iniciarTimer, 1000);
+    };
+
+    var _origCrearNuevo = window.crearNuevoSimulacroIAR;
+    window.crearNuevoSimulacroIAR = function() {
+      limpiarTimer();
+      if (typeof _origCrearNuevo === 'function') _origCrearNuevo.apply(this, arguments);
+      setTimeout(iniciarTimer, 1000);
+    };
+
+    // 5. Al completar el simulacro manualmente → limpiar timer
+    var _origMostrarPuntuacion = window.mostrarPuntuacionTotal;
+    if (_origMostrarPuntuacion) {
+      window.mostrarPuntuacionTotal = function(seccionId) {
+        if (seccionId === 'simulacro_iar') limpiarTimer();
+        if (typeof _origMostrarPuntuacion === 'function') _origMostrarPuntuacion.apply(this, arguments);
+      };
+    }
+    // También hookeamos el evento DOMContentLoaded del mostrarPuntuacionTotal redefinido
+    document.addEventListener('sim-timer-hook-puntuacion', function() {
+      limpiarTimer();
+    });
+  }
+
+  // Si hay timer guardado y estamos en el simulacro al cargar, arrancarlo
+  document.addEventListener('DOMContentLoaded', function() {
+    _hookearFunciones();
+
+    // Parchear mostrarPuntuacionTotal que se define dentro del otro DOMContentLoaded
+    // Usamos un MutationObserver sobre window.mostrarPuntuacionTotal
+    var _puntuacionHookInterval = setInterval(function() {
+      if (window.mostrarPuntuacionTotal && !window.mostrarPuntuacionTotal._timerHooked) {
+        var _orig = window.mostrarPuntuacionTotal;
+        window.mostrarPuntuacionTotal = function(seccionId) {
+          if (seccionId === 'simulacro_iar') limpiarTimer();
+          _orig.apply(this, arguments);
+        };
+        window.mostrarPuntuacionTotal._timerHooked = true;
+        clearInterval(_puntuacionHookInterval);
+      }
+    }, 200);
+
+    // Si la página carga con hash #simulacro_iar y hay timer guardado → arrancar
+    var hash = (window.location.hash || '').replace('#','');
+    if (hash === 'simulacro_iar') {
+      var finGuardado = null;
+      try { finGuardado = localStorage.getItem(SIMULACRO_TIMER_KEY); } catch(e) {}
+      if (finGuardado) {
+        // Esperar a que el simulacro esté completamente inicializado
+        setTimeout(iniciarTimer, 1200);
+      }
+    }
+  });
 
 })();
