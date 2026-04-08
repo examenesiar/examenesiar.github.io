@@ -28,7 +28,7 @@
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
 
       /* ── Variables ── */
       .oav-wrapper {
@@ -50,7 +50,7 @@
         --oav-shadow:  0 2px 16px rgba(37,99,235,0.07), 0 1px 3px rgba(0,0,0,0.05);
       }
 
-      /* ── Header de progreso — más compacto ── */
+      /* ── Header de progreso ── */
       .oav-header {
         display: flex;
         align-items: center;
@@ -471,7 +471,6 @@
         0%, 100% { background: #e2e8f0; transform: scaleY(1);   }
         50%       { background: #fbbf24; transform: scaleY(1.7); }
       }
-      /* tooltip del número al hacer hover */
       .oav-dot::after {
         content: attr(data-num);
         position: absolute;
@@ -554,8 +553,6 @@
   window.oavState = oavState;
 
   // Marcas temporales de sesión: { [seccionId]: { [qIndex]: [texto1, texto2, ...] } }
-  // Solo viven en memoria. Se borran al salir del cuestionario o al reiniciar.
-  // NO incluyen preguntas ya respondidas (graded).
   const _sessionMarks = {};
   window._oavSessionMarks = _sessionMarks;
 
@@ -617,22 +614,18 @@
   }
 
   function getScores(seccionId) {
-    // Si ya hay puntajes en memoria para esta sección, usarlos
     if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionId]) {
       const scores = window.puntajesPorSeccion[seccionId];
-      // Verificar que no son todos null (memoria vacía tras recarga)
       const tieneAlgo = scores.some(v => v !== null && v !== undefined);
       if (tieneAlgo) return scores;
     }
 
-    // Memoria vacía o sin datos → reconstruir desde localStorage
     const preguntas = window.preguntasPorSeccion && window.preguntasPorSeccion[seccionId];
     if (!preguntas || preguntas.length === 0) return [];
 
     const s = getQuizState(seccionId);
     if (!s || !s.graded || !s.shuffleMap) return Array(preguntas.length).fill(null);
 
-    // Reconstruir puntaje para cada pregunta calificada
     const scores = Array(preguntas.length).fill(null);
     preguntas.forEach(function(preg, idx) {
       if (!s.graded[idx]) return;
@@ -644,7 +637,6 @@
       scores[idx] = JSON.stringify(selOriginal) === JSON.stringify(correctaOriginal) ? 1 : 0;
     });
 
-    // Guardar en memoria para no tener que recalcular
     if (!window.puntajesPorSeccion) window.puntajesPorSeccion = {};
     window.puntajesPorSeccion[seccionId] = scores;
     return scores;
@@ -657,7 +649,6 @@
   }
 
   function getShuffledOptions(seccionId, idx, opciones) {
-    // 1) Si la pregunta YA fue respondida (graded) → usar el shuffleMap congelado
     const s = getQuizState(seccionId);
     const isGraded = s && s.graded && s.graded[idx];
 
@@ -668,8 +659,6 @@
       }));
     }
 
-    // 2) Pregunta NO respondida → generar mezcla aleatoria NUEVA cada vez
-    //    NUNCA persistir en localStorage: se congela solo al presionar "Responder"
     var indices = opciones.map(function(_, i) { return i; });
     var seed = (Date.now() + idx * 7919 + (Math.random() * 1e9 | 0)) >>> 0;
     function rng() {
@@ -686,23 +675,18 @@
     });
   }
 
-  // Para preguntas RESPONDIDAS: devuelve los mixedIndex guardados en localStorage (posición congelada)
-  // Para preguntas NO respondidas: devuelve los mixedIndex que corresponden a los textos marcados en sesión
   function getRestoredAnswers(seccionId, idx, shuffledOptions) {
     const s = getQuizState(seccionId);
     const isGraded = s && s.graded && s.graded[idx];
 
     if (isGraded) {
-      // Pregunta respondida: usar posiciones congeladas en localStorage
       if (!s || !s.answers || !s.answers[idx]) return [];
       return s.answers[idx];
     }
 
-    // Pregunta NO respondida: buscar marcas de sesión por texto
     const sessionTextos = _getSessionMark(seccionId, idx);
     if (!sessionTextos || sessionTextos.length === 0) return [];
 
-    // Mapear texto marcado → mixedIndex en el orden actual de shuffledOptions
     const marcados = [];
     if (shuffledOptions) {
       sessionTextos.forEach(function(texto) {
@@ -730,10 +714,6 @@
     const cont = document.getElementById('cuestionario-' + seccionId);
     if (!cont) return;
 
-    // Al entrar a un cuestionario (carga nueva), borrar marcas de sesión previas.
-    // Las marcas solo sobreviven mientras el usuario navega DENTRO del mismo cuestionario
-    // sin salir (Caso 7). Si renderOAV se llama es porque se está cargando desde afuera.
-    // Excepción: si ya existe oavState para esta sección (re-render interno), conservarlas.
     const esCargaNueva = !oavState[seccionId];
     if (esCargaNueva) {
       _clearSessionMarks(seccionId);
@@ -748,19 +728,16 @@
     const scores = getScores(seccionId);
     const allAnswered = scores.length === preguntas.length && scores.every(v => v !== null && v !== undefined);
 
-    // Prioridad 1: buscador
     if (typeof window._buscadorTargetIdx === 'number' && window._buscadorTargetIdx >= 0) {
       oavState[seccionId].currentIdx = window._buscadorTargetIdx;
       window._buscadorTargetIdx = null;
       _clearCurrentIdx(seccionId);
     }
-    // Prioridad 2: índice guardado en localStorage (el usuario navegó y salió)
     else if (!allAnswered) {
       const savedIdx = _loadCurrentIdx(seccionId);
       if (savedIdx !== null && savedIdx >= 0 && savedIdx < preguntas.length) {
         oavState[seccionId].currentIdx = savedIdx;
       } else {
-        // Primera vez: ir a la primera sin calificar
         const firstUnanswered = preguntas.findIndex((_, i) => {
           const v = scores[i]; return v === null || v === undefined;
         });
@@ -813,12 +790,10 @@
     const qs  = getQuizState(seccionId);
     const inv = qs && qs.shuffleMap && qs.shuffleMap[idx];
 
-    /* ── Header ── */
     const barClass    = correct > 0 ? 'oav-bar-correct' : (wrong > 0 ? 'oav-bar-wrong' : 'oav-bar-answered');
     const statusClass = qStatus === 'correct' ? 'oav-status-correct' : qStatus === 'wrong' ? 'oav-status-wrong' : 'oav-status-unanswered';
     const statusIcon  = qStatus === 'correct' ? '✓' : qStatus === 'wrong' ? '✗' : '?';
 
-    /* ── Opciones ── */
     let opcionesHTML = '';
     shuffled.forEach((opt, mi) => {
       const isSelected = restoredMixed.includes(opt.mixedIndex);
@@ -853,7 +828,6 @@
         </label>`;
     });
 
-    /* ── Badge resultado ── */
     let resultBadgeHTML = '';
     if (isGraded) {
       resultBadgeHTML = qStatus === 'correct'
@@ -861,7 +835,6 @@
         : '<span class="oav-result-badge oav-result-wrong">✗ Incorrecto (0)</span>';
     }
 
-    /* ── Explicación ── */
     const expShown = qs && qs.explanationShown && qs.explanationShown[idx];
     let explicacionHTML = '';
     if (preg.explicacion && preg.explicacion.trim() !== '') {
@@ -882,7 +855,6 @@
         ${expContent}`;
     }
 
-    /* ── Mini-mapa: barra de segmentos horizontal ── */
     let minimapHTML = '<div class="oav-minimap" title="Navegá entre preguntas">';
     for (let i = 0; i < total; i++) {
       const st2 = getQuestionStatus(seccionId, i);
@@ -896,14 +868,12 @@
     }
     minimapHTML += '</div>';
 
-    // Chip de pendientes: clickeable si hay preguntas sin responder
     const pending = total - answered;
     const firstPendingIdx = pending > 0
       ? Array.from({length: total}, (_, i) => i).find(i => {
           const v = scores[i]; return (v === null || v === undefined) && i !== idx;
         })
       : null;
-    // Si no hay otra pendiente distinta a la actual, buscar incluyendo la actual
     const jumpToPending = firstPendingIdx !== null && firstPendingIdx !== undefined
       ? firstPendingIdx
       : (pending > 0 ? Array.from({length: total}, (_, i) => i).find(i => {
@@ -918,7 +888,6 @@
          </span>`
       : `<span class="oav-chip oav-chip-pending">✓ todas respondidas</span>`;
 
-    /* ── Render final ── */
     wrapper.innerHTML = `
       <div class="oav-header">
         <div class="oav-counter">
@@ -980,7 +949,6 @@
       </div>` : ''}
     `;
 
-    /* ── Listeners de selección ── */
     const optContainer = document.getElementById('oav-options-' + seccionId + '-' + idx);
     if (optContainer && !isGraded) {
       optContainer.querySelectorAll('input').forEach(inp => {
@@ -998,7 +966,6 @@
       });
     }
 
-    /* ── Resaltado de texto buscado (si viene del buscador) ── */
     if (window._buscadorQueryPendiente) {
       var query = window._buscadorQueryPendiente;
       window._buscadorQueryPendiente = null;
@@ -1009,7 +976,6 @@
       });
     }
 
-    /* ── Comentarios por pregunta (desactivados en simulacro) ── */
     if (typeof window._oavRenderComentarios === 'function' && seccionId !== 'simulacro_iar') {
       window._oavRenderComentarios(seccionId, idx);
     }
@@ -1019,10 +985,6 @@
      PERSISTENCIA LOCAL
   ───────────────────────────────────────────────────────── */
   function _persistAnswers(seccionId, qIndex) {
-    // Las marcas de preguntas NO respondidas se guardan en MEMORIA DE SESIÓN
-    // por TEXTO (no por posición). Así sobreviven a la re-aleatorización de opciones
-    // mientras el usuario navega dentro del mismo cuestionario.
-    // Se borran al salir, reiniciar o crear nuevo simulacro (Casos 2,3,4,6,8,9,12).
     try {
       const inputs = Array.from(document.getElementsByName('pregunta' + seccionId + qIndex));
       const textos = inputs
@@ -1033,7 +995,6 @@
         })
         .filter(t => t !== '');
       _setSessionMark(seccionId, qIndex, textos);
-      // NO escribir en localStorage — las marcas pendientes solo viven en sesión
     } catch (e) {}
   }
 
@@ -1080,8 +1041,6 @@
       if (!all[seccionId].graded)           all[seccionId].graded           = {};
       if (!all[seccionId].explanationShown) all[seccionId].explanationShown = {};
 
-      // Al responder, SIEMPRE construir el inv desde el DOM actual y congelarlo.
-      // El orden actual en el DOM es el orden aleatorio de ESTE momento → queda fijo.
       const invBuild = {};
       inputs.forEach((inp, mi) => {
         invBuild[mi] = parseInt(inp.getAttribute('data-original-index'), 10);
@@ -1097,44 +1056,34 @@
 
       all[seccionId].answers[qIndex] = selMixed;
       all[seccionId].graded[qIndex]  = true;
-      // Si el examen estaba marcado como completado (totalShown=true) y el usuario
-      // está respondiendo de nuevo, resetear totalShown para que el nuevo intento
-      // sea reconocido como 'en curso'
       if (all[seccionId].totalShown) {
         all[seccionId].totalShown = false;
       }
       localStorage.setItem('quiz_state_v3', JSON.stringify(all));
 
-      // Limpiar la marca de sesión de esta pregunta (ya está respondida y congelada)
       if (_sessionMarks[seccionId]) {
         delete _sessionMarks[seccionId][qIndex];
       }
 
-      // Sincronizar con Firestore inmediatamente (no debounced)
       if (typeof window._guardarSeccionFirestoreInmediato === 'function') {
         window._guardarSeccionFirestoreInmediato(seccionId);
       } else if (typeof window._guardarSeccionFirestore === 'function') {
         window._guardarSeccionFirestore(seccionId);
       }
 
-      // Actualizar puntajes en memoria
       if (!window.puntajesPorSeccion)                window.puntajesPorSeccion          = {};
       if (!window.puntajesPorSeccion[seccionId])     window.puntajesPorSeccion[seccionId] = Array(preguntas.length).fill(null);
       window.puntajesPorSeccion[seccionId][qIndex]   = isCorrect ? 1 : 0;
 
-      // Guardar posición actual
       if (oavState[seccionId]) {
         _saveCurrentIdx(seccionId, oavState[seccionId].currentIdx);
       }
 
-      // Re-render la tarjeta actual
       renderOAVPage(seccionId);
 
-      // Verificar si todas están respondidas
       const allAnswered = window.puntajesPorSeccion[seccionId].every(v => v !== null && v !== undefined);
       if (allAnswered && !all[seccionId].totalShown) {
         _clearCurrentIdx(seccionId);
-        // Detener el timer del simulacro al responder la última pregunta
         if (seccionId === 'simulacro_iar' && window._simulacroTimer) {
           window._simulacroTimer.limpiar();
         }
@@ -1171,11 +1120,7 @@
   };
 
   window._oavReiniciar = function (seccionId) {
-    // IMPORTANTE: NO limpiar marcas aquí — se limpian dentro del callback de confirmación
-    // para que si el usuario cancela el diálogo, las marcas se conserven.
     if (typeof window.reiniciarExamen === 'function') {
-      // reiniciarExamen mostrará el diálogo de confirmación.
-      // Pasamos un callback postConfirm para limpiar el estado OAV solo si se confirma.
       window._oavPendingReiniciarCallback = function() {
         _clearCurrentIdx(seccionId);
         _clearSessionMarks(seccionId);
@@ -1183,11 +1128,9 @@
           oavState[seccionId].currentIdx = 0;
           oavState[seccionId].isReviewing = false;
         }
-        // Borrar en Firestore
         if (typeof window._borrarSeccionFirestore === 'function') {
           window._borrarSeccionFirestore(seccionId);
         }
-        // Reiniciar el cronómetro si es el simulacro IAR
         if (seccionId === 'simulacro_iar' && window._simulacroTimer) {
           window._simulacroTimer.limpiar();
           setTimeout(function() {
@@ -1197,7 +1140,6 @@
       };
       window.reiniciarExamen(seccionId);
     } else {
-      // Fallback si reiniciarExamen no existe
       _clearCurrentIdx(seccionId);
       _clearSessionMarks(seccionId);
       try {
@@ -1230,14 +1172,12 @@
     const icon       = pct === 100 ? '🏆' : pct >= 70 ? '🌟' : pct >= 50 ? '💪' : '📚';
     const frase      = _localFrase(pct);
 
-    // Marcar totalShown
     try {
       const raw = localStorage.getItem('quiz_state_v3');
       const all = JSON.parse(raw || '{}');
       if (all[seccionId]) { all[seccionId].totalShown = true; localStorage.setItem('quiz_state_v3', JSON.stringify(all)); }
     } catch(e) {}
 
-    // Disparar lógica original (checkmark, attemptLog)
     const resultNode = document.getElementById('resultado-total-' + seccionId);
     if (resultNode && !resultNode.dataset.oavFired) {
       resultNode.dataset.oavFired = '1';
@@ -1249,7 +1189,6 @@
     const wrapper = document.getElementById('oav-wrapper-' + seccionId);
     if (!wrapper) return;
 
-    // Calcular siguiente sección en el carrusel IAR
     const IAR_CARRUSEL_OAV = [
       'iarsep2020','iaroct2020','iarnov2020','iardic2020',
       'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
@@ -1302,7 +1241,6 @@
   }
 
   function _localFrase(pct) {
-    // Selecciona aleatoriamente uno de los mensajes del rango correspondiente
     function pick(arr) {
       return arr[Math.floor(Math.random() * arr.length)];
     }
@@ -1370,27 +1308,12 @@
 
   /* ─────────────────────────────────────────────────────────
      INTEGRACIÓN CON script.js
-     
-     En lugar de parchear generarCuestionario con polling (frágil),
-     exponemos renderOAV y oavState globalmente para que script.js
-     los llame directamente al final de generarCuestionario.
-     
-     script.js ya tiene el llamado integrado:
-       if (typeof window._oavRenderOAV === 'function') {
-         window._oavRenderOAV(seccionId);
-       }
-     
-     Esto garantiza que el modo tarjetita se active siempre,
-     sin importar la velocidad de carga del navegador.
   ───────────────────────────────────────────────────────── */
-
-  // Exponer funciones para script.js y para debug
   window._oavRenderOAV = renderOAV;
   window._oavState     = oavState;
 
-  /* ─── Acciones de la pantalla de resultados ─── */
   window._oavVolverAlMenu = function(seccionId) {
-    _clearSessionMarks(seccionId); // Borrar marcas pendientes al salir (Casos 2, 6)
+    _clearSessionMarks(seccionId);
     try {
       const raw = localStorage.getItem('quiz_state_v3');
       const all = JSON.parse(raw || '{}');
@@ -1408,7 +1331,7 @@
   };
 
   window._oavVolverAlSubmenu = function(seccionId) {
-    _clearSessionMarks(seccionId); // Borrar marcas pendientes al volver al submenú (Casos 3, 9)
+    _clearSessionMarks(seccionId);
     try {
       const raw = localStorage.getItem('quiz_state_v3');
       const all = JSON.parse(raw || '{}');
@@ -1418,18 +1341,16 @@
       const len = (window.preguntasPorSeccion && window.preguntasPorSeccion[seccionId] || []).length;
       window.puntajesPorSeccion[seccionId] = Array(len).fill(null);
     }
-    // Detectar el submenú correspondiente basado en la sección
     const submenuId = seccionId.startsWith('iar') ? 'iar-submenu' : 'submenu';
     if (typeof window.volverAlSubmenu === 'function') {
       window.volverAlSubmenu(submenuId);
     } else {
-      // Fallback: ir al menú principal
       if (typeof window.volverAlMenu === 'function') window.volverAlMenu();
     }
   };
 
   window._oavAvanzarSiguiente = function(seccionActual, seccionSiguiente) {
-    _clearSessionMarks(seccionActual); // Borrar marcas pendientes al avanzar de sección
+    _clearSessionMarks(seccionActual);
     try {
       const raw = localStorage.getItem('quiz_state_v3');
       const all = JSON.parse(raw || '{}');
@@ -1444,7 +1365,6 @@
     }
   };
 
-  /* ── Resaltar texto buscado dentro del wrapper OAV ── */
   function _resaltarTextoBuscadoOAV(container, query) {
     if (!query || query.length < 2) return;
     var queryLower = query.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -1476,19 +1396,9 @@
   console.log('[OAV] ✅ Modo una-pregunta-por-vez listo.');
 
   /* ================================================================
-     SISTEMA DE COMENTARIOS POR PREGUNTA — v2
-     - Usuarios con licencia completa: leer y escribir
-     - Admin: leer, escribir, eliminar (individual / todos), pausar
-     - Demo: solo lectura (sin formulario)
-     - Moderación automática de lenguaje inapropiado / spam / URLs
-       (lista ajustada para contexto médico, evita falsos positivos)
-     - Datos en Firestore: comentarios/{seccionId}_{idx}/mensajes/{docId}
-       Campos: { uid, nombre, email, texto, timestamp, seccionId, preguntaIdx }
-     - Control de pausa en Firestore: config/comentarios_pausa
-       Campos: { global: bool, cuestionarios: {[seccionId]: bool}, preguntas: {[clave]: bool} }
+     SISTEMA DE COMENTARIOS POR PREGUNTA — v2 CON MODERACIÓN MEJORADA
   ================================================================ */
 
-  // ── Inyectar estilos ─────────────────────────────────────────────
   (function _inyectarEstilosComentarios() {
     const STYLE_ID = 'iar-comentarios-styles';
     if (document.getElementById(STYLE_ID)) return;
@@ -1511,7 +1421,6 @@
         padding: 1px 8px; font-size: 0.7rem; font-weight: 700;
         letter-spacing: 0; text-transform: none;
       }
-      /* ── Barra de herramientas Admin ── */
       .iar-admin-toolbar {
         display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
         background: #eff6ff; border: 1px solid #bfdbfe;
@@ -1538,7 +1447,6 @@
       .iar-admin-btn.pausar-cuest  { background: #fde68a; color: #78350f; }
       .iar-admin-btn.pausar-global { background: #fca5a5; color: #7f1d1d; }
       .iar-admin-btn.activo        { outline: 2px solid currentColor; }
-      /* ── Lista y ítems ── */
       .iar-com-lista {
         display: flex; flex-direction: column; gap: 8px;
         margin-bottom: 10px; max-height: 300px; overflow-y: auto; padding-right: 3px;
@@ -1567,7 +1475,6 @@
         border-radius: 5px; transition: color .15s, background .15s; line-height: 1;
       }
       .iar-com-del:hover { color: #dc2626; background: #fee2e2; }
-      /* ── Skeleton ── */
       .iar-skeleton { display: flex; flex-direction: column; gap: 7px; margin-bottom: 8px; }
       .iar-skeleton-item {
         background: linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);
@@ -1580,13 +1487,11 @@
         100% { background-position: -200% 0; }
       }
       .iar-com-vacio { text-align: center; color: #94a3b8; font-size: 0.79rem; padding: 8px 0 4px; font-style: italic; }
-      /* ── Banner de pausa ── */
       .iar-com-pausado {
         background: #fef3c7; border: 1px solid #fde68a; border-radius: 10px;
         padding: 10px 14px; font-size: 0.8rem; color: #92400e;
         display: flex; align-items: center; gap: 7px; margin-top: 6px;
       }
-      /* ── Formulario ── */
       .iar-com-form { display: flex; flex-direction: column; gap: 7px; margin-top: 4px; }
       .iar-com-ta {
         width: 100%; min-height: 66px; max-height: 130px;
@@ -1630,65 +1535,135 @@
     document.head.appendChild(s);
   })();
 
-  // ── Lista de términos prohibidos (moderación) ────────────────────
-  // NOTA: ajustada para contexto médico.
-  // Se evitan subcadenas que produzcan falsos positivos en terminología
-  // médica (ej: "anal", "recto", "pene", "vagina", "boca", "culo" como
-  // término anatómico neutro en algunos contextos) — solo se bloquean
-  // expresiones claramente ofensivas o amenazantes.
-  const _COM_PROHIBIDAS = [
-    // Insultos directos en español rioplatense / latinoamericano
-    'pelotud','bolud','forro','hdp','hijodeputa','hijo de puta',
-    'puta que te pario','puta madre',
-    'zorra','imbecil','tarad','mogol',
-    'jodete','andate a la mierda','chupala',
-    'sorete','cagon','cagón','lacra',
-    'negro de mierda','sudaca de mierda',
-    // Insultos en inglés
-    'fuck you','fuck off','motherfuck','nigger','faggot',
-    'dumbass','dickhead','asshole','shithead',
-    // Amenazas
-    'te voy a matar','te mato','te pego','me las vas a pagar',
-    'te voy a cagar a palos',
-    // Spam / URLs
-    'http://','https://','www.',
-    'click aqui','click acá','gana dinero','ganá dinero',
-    'whatsapp.com','telegram.me','discord.gg',
-  ];
-
+  // ============================================================
+  // FUNCIÓN DE NORMALIZACIÓN MEJORADA (LEET SPEAK + SÍMBOLOS)
+  // ============================================================
   function _comNorm(t) {
-    return t.toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-      .replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+    if (!t) return '';
+    
+    // Paso 1: minúsculas
+    let result = t.toLowerCase();
+    
+    // Paso 2: reemplazar números y símbolos por letras (leet speak)
+    const leetMap = {
+        '0': 'o', '1': 'i', '2': 'z', '3': 'e', '4': 'a',
+        '5': 's', '6': 'b', '7': 't', '8': 'b', '9': 'g',
+        '@': 'a', '$': 's', '+': 't', '&': 'y',
+        '#': 'h', '%': 'o', '^': 'v',
+        // Puntuación y separadores → espacio (no confundir con leet)
+        '!': ' ', '?': ' ', '.': ' ', ',': ' ', ';': ' ', ':': ' ',
+        '*': ' ', '-': ' ', '_': ' ', '=': ' ', '<': ' ', '>': ' ',
+        '/': ' ', '\\': ' ', '|': ' ', '(': ' ', ')': ' ',
+        '[': ' ', ']': ' ', '{': ' ', '}': ' '
+    };
+    result = result.split('').map(c => leetMap[c] !== undefined ? leetMap[c] : c).join('');
+    
+    // Paso 3: eliminar tildes
+    result = result.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    
+    // Paso 4: eliminar caracteres especiales restantes
+    result = result.replace(/[^a-z\s]/g, ' ');
+    
+    // Paso 5: colapsar letras repetidas (ej: "culooo" → "culo", "boluuddo" → "boludo")
+    result = result.replace(/(.)\1{2,}/g, '$1$1');
+    
+    // Paso 6: espacios múltiples a uno solo y trim
+    result = result.replace(/\s+/g, ' ').trim();
+    
+    return result;
   }
 
-  // Moderación con coincidencia de palabras completas para evitar falsos positivos
+  // ============================================================
+  // LISTA DE PALABRAS PROHIBIDAS (SOLO BASE, SIN VARIANTES)
+  // ============================================================
+  const _COM_PROHIBIDAS = [
+    // INSULTOS DIRECTOS
+    'pelotudo', 'boludo', 'forro', 'hijodeputa', 'puta', 'puto',
+    'choto', 'zorra', 'gil', 'tarado', 'mogolico', 'trolo',
+    'marica', 'maricon', 'sorete', 'cagon', 'mierda', 'lacra',
+    'escoria', 'basura', 'rata', 'chancho', 'cerdo', 'perro', 'buitre', 'alimaña',
+    
+    // PARTES DEL CUERPO (en contexto ofensivo - NO MÉDICO)
+    'culo', 'culito', 'culos','orto', 'concha', 'verga', 'pija', 'pito', 'pichula', 'teta', 'nalga',
+    
+    // COMBINACIONES OFENSIVAS
+    'hijodeputa', 'hijaputa', 'hijueputa', 'conchadesumadre', 'conchatumadre', 'putamadre', 'reputamadre', 'reconcha',
+    'chupapija', 'chupapito', 'chupala','rompebolas', 'rompepelotas', 'soplapija', 'comepija', 'comemierda',
+    'cagartepalos', 'cagarapalos',
+    
+    // INSULTOS RACISTAS / XENOFÓBICOS
+    'sudaca', 'sudaka', 'bolita', 'paragua', 'boliguayo',     'chilote', 'brasuca', 'negrodemierda', 'negrada',
+    
+    // DISCAPACIDAD COMO INSULTO
+    'mongolico', 'retrasado', 'retardado', 'discapacitado', 'tonto', 'lelo', 'autista',
+    
+    // INSULTOS POR ORIENTACIÓN SEXUAL
+    'puto', 'maricon', 'maricón','trolo', 'travesti', 'tortillera', 'bollera',
+    
+    // INSULTOS POR CONDICIÓN SOCIAL
+    'villero', 'planero', 'choriplanero', 'grasa', 'croto',
+    
+    // SPAM / URLs
+    'http', 'https', 'www', 'clickaqui', 'clickaca', 'ganadinero', 'ganaplata','whatsapp', 'telegram', 'discord', 'instagram', 'facebook', 'twitter',
+    'tiktok', 'inversiones', 'trading', 'cripto', 'bitcoin', 'prestamo', 'credito',
+    
+    // OFENSAS VARIAS
+    'inservible', 'inutil', 'inepto', 'fracasado', 'mamerto',
+    'chupamedias', 'lamebotas', 'vendepatria', 'traidor', 'mentiroso',
+    'estafador', 'chorro', 'ratero', 'vago', 'parasito', 'apestoso',
+  ];
+
+  // ============================================================
+  // FRASES PROHIBIDAS COMPLETAS
+  // ============================================================
+  const _COM_FRASES_PROHIBIDAS = [
+    'te voy a matar', 'te mato', 'te pego', 'te voy a cagar', 'cagar a palos',
+    'anda a la mierda', 'andate a la mierda', 'la concha de tu madre',
+    'la puta que te pario', 'la puta madre',     'hijo de puta', 'hija puta', 'hijue puta',
+    'concha de su madre', 'concha tumadre', 'puta madre', 'reputa madre', 'chupa pija', 'chupa pito', 'rompe bolas', 'rompe pelotas',
+    'sopla pija', 'come pija', 'cagarte a palos', 'cagar a palos',
+  ];
+
+  // ============================================================
+  // FUNCIÓN DE MODERACIÓN MEJORADA
+  // ============================================================
   function _comModerar(texto) {
     if (!texto || !texto.trim()) return 'El comentario no puede estar vacío.';
     const t = texto.trim();
-    if (t.length < 5)   return 'El comentario es demasiado corto (mínimo 5 caracteres).';
+    if (t.length < 5) return 'El comentario es demasiado corto (mínimo 5 caracteres).';
     if (t.length > 800) return 'El comentario es demasiado largo (máximo 800 caracteres).';
+    
+    // Normalizar el texto completo
     const norm = _comNorm(t);
-    for (const p of _COM_PROHIBIDAS) {
-      const pn = _comNorm(p);
-      // Para frases cortas (una palabra), exigir límites de palabra para evitar
-      // falsos positivos en terminología médica compuesta.
-      const esMultipalabra = pn.includes(' ');
-      if (esMultipalabra) {
-        if (norm.includes(pn))
-          return '⚠️ Tu comentario contiene lenguaje inapropiado o enlaces no permitidos. Revisalo antes de publicar.';
-      } else {
-        // Verificar límite de palabra: el término no debe estar dentro de una palabra más larga
-        const re = new RegExp('(^|\\s)' + pn.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '(\\s|$)');
-        if (re.test(norm))
-          return '⚠️ Tu comentario contiene lenguaje inapropiado o enlaces no permitidos. Revisalo antes de publicar.';
-      }
+    
+    // Verificar cada palabra prohibida
+    for (const palabra of _COM_PROHIBIDAS) {
+        const pn = _comNorm(palabra);
+        
+        // Buscar como palabra completa (con límites de palabra)
+        const reEscaped = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp('(?:^|\\s)' + reEscaped + '(?:\\s|$)', 'i');
+        // También buscar sin límites para detectar variantes pegadas (culito, pijazo, etc.)
+        const rePartial = new RegExp(reEscaped, 'i');
+        if (re.test(norm) || rePartial.test(norm)) {
+            return '⚠️ Tu comentario contiene lenguaje inapropiado o enlaces no permitidos. Revisalo antes de publicar.';
+        }
     }
-    if (/(.)\1{6,}/.test(t))
-      return '⚠️ El comentario parece contener texto repetitivo. Escribí un aporte válido.';
-    const soloLetras = t.replace(/[^a-zA-Z]/g,'');
-    if (soloLetras.length > 10 && soloLetras.replace(/[^A-Z]/g,'').length / soloLetras.length > 0.7)
-      return '⚠️ Por favor evitá escribir todo en MAYÚSCULAS.';
+    
+    // Verificar frases completas
+    for (const frase of _COM_FRASES_PROHIBIDAS) {
+        const fn = _comNorm(frase);
+        if (norm.includes(fn)) {
+            return '⚠️ Tu comentario contiene lenguaje inapropiado o enlaces no permitidos. Revisalo antes de publicar.';
+        }
+    }
+    
+    // Verificar spam de mayúsculas
+    const soloLetras = t.replace(/[^a-zA-Z]/g, '');
+    if (soloLetras.length > 10 && soloLetras.replace(/[^A-Z]/g, '').length / soloLetras.length > 0.7) {
+        return '⚠️ Por favor evitá escribir todo en MAYÚSCULAS.';
+    }
+    
     return null;
   }
 
@@ -1720,7 +1695,6 @@
     return { user, esDemo, esAdmin, nombre, uid: user ? user.uid : null };
   }
 
-  // ── Leer configuración de pausa desde Firestore ──────────────────
   async function _comLeerPausa() {
     try {
       const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
@@ -1734,16 +1708,13 @@
     }
   }
 
-  // ── Escribir configuración de pausa en Firestore ─────────────────
   async function _comEscribirPausa(campos) {
     const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
     const db = window._firestoreDB_comentarios;
     if (!db) throw new Error('sin db');
     const ref = doc(db, 'config', 'comentarios_pausa');
-    // Leer estado actual y fusionar
     let actual = {};
     try { const s = await getDoc(ref); if (s.exists()) actual = s.data(); } catch(e) {}
-    // Fusión profunda para campos anidados
     const nuevo = Object.assign({}, actual);
     for (const [k, v] of Object.entries(campos)) {
       if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
@@ -1756,7 +1727,6 @@
     return nuevo;
   }
 
-  // ── Verificar si los comentarios están pausados para una clave ───
   function _comEstaPausado(pausa, seccionId, clave) {
     if (!pausa) return false;
     if (pausa.global === true) return 'global';
@@ -1765,7 +1735,6 @@
     return false;
   }
 
-  // ── Renderizar la sección de comentarios para una pregunta ───────
   async function _comRender(seccionId, preguntaIdx) {
     const wrapperId = 'oav-wrapper-' + seccionId;
     const wrapper = document.getElementById(wrapperId);
@@ -1784,9 +1753,8 @@
     }
 
     const { esDemo, esAdmin, nombre, uid } = _comGetUser();
-    if (!uid) return; // no autenticado: no mostrar nada
+    if (!uid) return;
 
-    // Leer estado de pausa
     const pausa = await _comLeerPausa();
     const motivoPausa = _comEstaPausado(pausa, seccionId, clave);
 
@@ -1805,12 +1773,10 @@
       <div id="iar-formarea-${clave}"></div>
     `;
 
-    // ── Toolbar de admin ─────────────────────────────────────────
     if (esAdmin) {
       _comRenderAdminToolbar(cont, clave, seccionId, pausa, uid, nombre);
     }
 
-    // ── Área del formulario ──────────────────────────────────────
     const formArea = cont.querySelector('#iar-formarea-' + clave);
     if (esDemo) {
       formArea.innerHTML = `
@@ -1854,7 +1820,6 @@
     await _comCargar(clave, cont, uid, esAdmin);
   }
 
-  // ── Renderizar barra de herramientas para admin ──────────────────
   function _comRenderAdminToolbar(cont, clave, seccionId, pausa, uid, nombre) {
     const tbEl = cont.querySelector('#iar-admintb-' + clave);
     if (!tbEl) return;
@@ -1872,18 +1837,15 @@
         <button class="iar-admin-btn pausar-global ${pausaGlobal ? 'activo' : ''}" id="iar-adm-pglo-${clave}"  title="Pausar/reanudar todos los comentarios de la plataforma">${pausaGlobal ? '▶️ Reanudar todo' : '⏸️ Pausar todo'}</button>
       </div>`;
 
-    // Borrar todos los comentarios de esta pregunta
     tbEl.querySelector('#iar-adm-borrar-' + clave).addEventListener('click', async () => {
       if (!confirm('¿Borrar TODOS los comentarios de esta pregunta? Esta acción no se puede deshacer.')) return;
       await _comBorrarTodos(clave, cont);
     });
 
-    // Pausar/reanudar esta pregunta
     tbEl.querySelector('#iar-adm-ppre-' + clave).addEventListener('click', async () => {
       const nuevoVal = !pausaPreg;
       try {
-        const nuevoEstado = await _comEscribirPausa({ preguntas: { [clave]: nuevoVal } });
-        // Refrescar la vista completa
+        await _comEscribirPausa({ preguntas: { [clave]: nuevoVal } });
         const partes = clave.split('_');
         const idx = parseInt(partes[partes.length - 1]);
         const sid = partes.slice(0, partes.length - 1).join('_');
@@ -1891,7 +1853,6 @@
       } catch(e) { alert('No se pudo cambiar el estado. Intentá de nuevo.'); }
     });
 
-    // Pausar/reanudar cuestionario completo
     tbEl.querySelector('#iar-adm-pcue-' + clave).addEventListener('click', async () => {
       const nuevoVal = !pausaCuest;
       const accion = nuevoVal ? 'pausar' : 'reanudar';
@@ -1905,7 +1866,6 @@
       } catch(e) { alert('No se pudo cambiar el estado. Intentá de nuevo.'); }
     });
 
-    // Pausar/reanudar todos los comentarios globalmente
     tbEl.querySelector('#iar-adm-pglo-' + clave).addEventListener('click', async () => {
       const nuevoVal = !pausaGlobal;
       const accion = nuevoVal ? 'pausar' : 'reanudar';
@@ -1920,7 +1880,6 @@
     });
   }
 
-  // ── Borrar TODOS los comentarios de una pregunta (solo admin) ────
   async function _comBorrarTodos(clave, cont) {
     try {
       const { collection, getDocs, doc, deleteDoc, writeBatch } =
@@ -1945,7 +1904,6 @@
     }
   }
 
-  // ── Cargar comentarios desde Firestore ───────────────────────────
   async function _comCargar(clave, cont, uid, esAdmin) {
     const sk    = cont.querySelector('#iar-sk-'    + clave);
     const lista = cont.querySelector('#iar-lista-' + clave);
@@ -1992,7 +1950,6 @@
     }
   }
 
-  // ── Crear elemento DOM de un comentario ─────────────────────────
   function _comItemDOM(c, clave, uid, esAdmin) {
     const ADMIN_EMAIL = 'admin.14r@gmail.com';
     const esAutorAdmin = c.email === ADMIN_EMAIL;
@@ -2016,7 +1973,6 @@
     return div;
   }
 
-  // ── Enviar comentario ────────────────────────────────────────────
   async function _comEnviar(clave, seccionId, preguntaIdx, cont, uid, nombre, esAdmin) {
     const ta  = cont.querySelector('#iar-ta-'  + clave);
     const err = cont.querySelector('#iar-err-' + clave);
@@ -2028,19 +1984,14 @@
     err.style.display = 'none';
     ok.style.display  = 'none';
 
-    // El admin no está sujeto a moderación automática
-    if (!esAdmin) {
-      const errorMod = _comModerar(texto);
-      if (errorMod) {
-        err.textContent = errorMod;
-        err.style.display = 'block';
-        ta.focus();
-        return;
-      }
-    } else {
-      // Validaciones mínimas para admin
-      if (!texto) { err.textContent = 'El comentario no puede estar vacío.'; err.style.display = 'block'; return; }
-      if (texto.length > 800) { err.textContent = 'Máximo 800 caracteres.'; err.style.display = 'block'; return; }
+    // APLICAR MODERACIÓN (incluso para admin, pero admin puede saltarla si se desea)
+    // En este código, el admin también está sujeto a moderación.
+    const errorMod = _comModerar(texto);
+    if (errorMod) {
+      err.textContent = errorMod;
+      err.style.display = 'block';
+      ta.focus();
+      return;
     }
 
     btn.disabled = true;
@@ -2083,7 +2034,6 @@
     }
   }
 
-  // ── Eliminar comentario individual ───────────────────────────────
   async function _comEliminar(docId, clave, divEl) {
     if (!confirm('¿Eliminar este comentario?')) return;
     divEl.style.opacity = '0.4';
@@ -2113,9 +2063,8 @@
     }
   }
 
-  // ── Hook público: llamado desde renderOAVPage al final ───────────
   window._oavRenderComentarios = _comRender;
 
-  console.log('[IAR Comentarios] ✅ Sistema de comentarios v2 listo.');
+  console.log('[IAR Comentarios] ✅ Sistema de comentarios v2 con moderación mejorada listo.');
 
 })();
