@@ -13,7 +13,7 @@
   // ── URL base para imágenes (mismo criterio que script.js) ──
   const IMAGENES_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.startsWith('192.168.'))
     ? ''
-    : 'https://examenesiaruba.github.io/';
+    : 'https://examenesiar.github.io/';
 
   function getImagenUrl(path) {
     if (!path) return '';
@@ -1994,7 +1994,7 @@
 
   // ── Crear elemento DOM de un comentario ─────────────────────────
   function _comItemDOM(c, clave, uid, esAdmin) {
-    const ADMIN_EMAIL = 'micro2020uba@gmail.com';
+    const ADMIN_EMAIL = 'admin.14r@gmail.com';
     const esAutorAdmin = c.email === ADMIN_EMAIL;
     const esPropioComentario = c.uid === uid;
     const puedeEliminar = esAdmin || esPropioComentario;
