@@ -1413,11 +1413,12 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
         -webkit-backdrop-filter: blur(18px);
         border: 1px solid rgba(255,255,255,0.12);
         border-radius: 18px;
-        max-width: 680px; width: 100%;
-        padding: 48px 52px 38px;
+        max-width: 580px; width: 100%;
+        padding: 28px 32px 22px;
         box-shadow: 0 32px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06) inset;
         animation: bv-slideup 0.55s cubic-bezier(0.22,1,0.36,1) 0.1s both;
         position: relative; overflow: hidden;
+        max-height: 95vh; overflow-y: auto;
       }
       #bienvenida-card::before {
         content: '';
@@ -1437,14 +1438,14 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
       .bv-deco-line {
         width: 52px; height: 3px;
         background: linear-gradient(90deg, #3b82f6, #06b6d4);
-        border-radius: 2px; margin: 0 auto 20px;
+        border-radius: 2px; margin: 0 auto 14px;
       }
       .bv-logo-badge {
         display: inline-flex; align-items: center; gap: 10px;
         background: rgba(37,99,235,0.18);
         border: 1px solid rgba(59,130,246,0.35);
-        border-radius: 50px; padding: 6px 18px;
-        margin-bottom: 22px;
+        border-radius: 50px; padding: 5px 14px;
+        margin-bottom: 14px;
       }
       .bv-logo-text {
         font-family: 'Lato', sans-serif;
@@ -1456,21 +1457,21 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
 
       .bv-title {
         font-family: 'Playfair Display', Georgia, serif;
-        font-size: 1.9rem; font-weight: 700;
+        font-size: 1.55rem; font-weight: 700;
         color: #f0f6ff;
         text-align: center;
         line-height: 1.25;
-        margin-bottom: 28px;
+        margin-bottom: 18px;
         letter-spacing: 0.01em;
       }
 
       .bv-body {
         font-family: 'Lato', sans-serif;
-        font-size: 0.97rem; line-height: 1.78;
+        font-size: 0.88rem; line-height: 1.65;
         color: rgba(220,235,255,0.88);
         text-align: left;
       }
-      .bv-body p { margin-bottom: 16px; }
+      .bv-body p { margin-bottom: 12px; }
       .bv-body p:last-child { margin-bottom: 0; }
 
       .bv-highlight {
@@ -1479,30 +1480,30 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
       }
 
       .bv-divider {
-        height: 1px; margin: 28px 0;
+        height: 1px; margin: 18px 0;
         background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
       }
 
       .bv-closing {
         font-family: 'Playfair Display', Georgia, serif;
-        font-size: 1.05rem; font-style: italic;
+        font-size: 0.92rem; font-style: italic;
         color: #bfdbfe;
         text-align: center; margin-bottom: 4px;
       }
       .bv-wishes {
         font-family: 'Lato', sans-serif;
-        font-size: 0.85rem; color: rgba(147,197,253,0.7);
+        font-size: 0.78rem; color: rgba(147,197,253,0.7);
         text-align: center;
         letter-spacing: 0.04em;
       }
 
       #bv-btn-aceptar {
-        display: block; width: 100%; margin-top: 30px;
-        padding: 15px 24px;
+        display: block; width: 100%; margin-top: 20px;
+        padding: 12px 24px;
         background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 50%, #1e40af 100%);
         color: #fff; border: none; border-radius: 10px;
         font-family: 'Lato', sans-serif;
-        font-size: 1rem; font-weight: 700;
+        font-size: 0.92rem; font-weight: 700;
         letter-spacing: 1.2px; text-transform: uppercase;
         cursor: pointer;
         box-shadow: 0 6px 24px rgba(37,99,235,0.45);
@@ -1521,7 +1522,7 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
 
       .bv-no-mostrar {
         display: flex; align-items: center; gap: 10px;
-        justify-content: center; margin-top: 18px;
+        justify-content: center; margin-top: 12px;
         cursor: pointer; user-select: none;
       }
       .bv-no-mostrar input[type="checkbox"] { display: none; }
@@ -1549,9 +1550,12 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
       .bv-no-mostrar:hover .bv-no-mostrar-label { color: #93c5fd; }
 
       @media (max-width: 600px) {
-        #bienvenida-card { padding: 32px 24px 28px; }
-        .bv-title { font-size: 1.55rem; }
-        .bv-body { font-size: 0.92rem; }
+        #bienvenida-card { padding: 20px 18px 18px; }
+        .bv-title { font-size: 1.25rem; }
+        .bv-body { font-size: 0.82rem; line-height: 1.55; }
+        .bv-body p { margin-bottom: 10px; }
+        .bv-closing { font-size: 0.82rem; }
+        #bv-btn-aceptar { padding: 11px 16px; font-size: 0.85rem; margin-top: 16px; }
       }
     `;
     document.head.appendChild(st);
