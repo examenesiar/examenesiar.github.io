@@ -616,7 +616,7 @@ async function handleRegistro() {
     // Proveer instancia de Firestore a script.js para sincronización de progreso
     if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
 
-    ocultarLogin(true);
+    ocultarLogin(true, user.uid);
     aplicarRestriccionesDemo();
     _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
     mostrarBarraSesion(user.email, licencia);
@@ -1304,7 +1304,7 @@ async function handleLogin() {
     // Proveer instancia de Firestore a script.js para sincronización de progreso
     if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
 
-    ocultarLogin(true);
+    ocultarLogin(true, user.uid);
     if (licencia.esDemo) aplicarRestriccionesDemo();
     _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
     mostrarBarraSesion(user.email, licencia);
@@ -1323,49 +1323,316 @@ async function handleLogin() {
   }
 }
 
-function ocultarLogin(navegarAMenu = false) {
+function ocultarLogin(navegarAMenu = false, uid = null) {
   const overlay = document.getElementById("login-overlay");
   if (overlay) overlay.style.display = "none";
   document.body.style.overflow = "";
   if (navegarAMenu) {
     const hashActual = window.location.hash.replace('#', '');
     const esHashVacio = !hashActual || hashActual === 'menu';
-
-    // Detectar si es una RECARGA (F5) o un LOGIN NUEVO
-    // Al hacer F5, sessionStorage conserva esta clave.
-    // Al iniciar sesión desde cero, no existe.
     const esRecarga = sessionStorage.getItem('iar_sesion_activa') === '1';
 
     if (esRecarga && !esHashVacio) {
-      // F5 con hash válido: respetar la página actual, no forzar #menu
+      // El usuario tenía una sesión activa con hash de cuestionario — solo limpiar paneles
       setTimeout(function() {
         const modPanel = document.getElementById("modificar-respuestas-panel");
         if (modPanel) modPanel.style.display = "none";
       }, 150);
     } else {
-      // Login nuevo (o F5 sin hash útil): ir al menú principal
-      sessionStorage.setItem('iar_sesion_activa', '1'); // marcar sesión activa
-      window.location.hash = "menu";
-      setTimeout(function() {
-        const menuPrincipal = document.getElementById("menu-principal");
-        if (menuPrincipal) {
-          menuPrincipal.classList.remove("oculto");
-          menuPrincipal.style.display = "";
-        }
-        document.querySelectorAll(".pagina-cuestionario").forEach(function(p) {
-          p.classList.remove("activa");
-        });
-        document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(function(s) {
-          s.style.display = "none";
-        });
-        const modPanel = document.getElementById("modificar-respuestas-panel");
-        if (modPanel) modPanel.style.display = "none";
-      }, 150);
+      // Login nuevo (o re-login desde menú): mostrar bienvenida si corresponde, luego ir al menú
+      sessionStorage.setItem('iar_sesion_activa', '1');
+      const fnIrAlMenu = function() {
+        window.location.hash = "menu";
+        setTimeout(function() {
+          const menuPrincipal = document.getElementById("menu-principal");
+          if (menuPrincipal) {
+            menuPrincipal.classList.remove("oculto");
+            menuPrincipal.style.display = "";
+          }
+          document.querySelectorAll(".pagina-cuestionario").forEach(function(p) {
+            p.classList.remove("activa");
+          });
+          document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(function(s) {
+            s.style.display = "none";
+          });
+          const modPanel = document.getElementById("modificar-respuestas-panel");
+          if (modPanel) modPanel.style.display = "none";
+        }, 150);
+      };
+      mostrarBienvenidaSiCorresponde(uid, fnIrAlMenu);
     }
-
-    // Marcar sesión activa para futuras recargas
-    sessionStorage.setItem('iar_sesion_activa', '1');
   }
+}
+
+// ======== MENSAJE DE BIENVENIDA ========
+async function mostrarBienvenidaSiCorresponde(uid, fnIrAlMenu) {
+  // Si no tenemos uid, ir directo al menú
+  if (!uid) { fnIrAlMenu(); return; }
+
+  try {
+    const prefKey = "bienvenida_oculta_" + uid;
+    // Primero chequear localStorage como caché rápido
+    if (localStorage.getItem(prefKey) === "1") {
+      fnIrAlMenu();
+      return;
+    }
+    // Verificar en Firestore
+    const prefDoc = await getDoc(doc(db, "config", prefKey));
+    if (prefDoc.exists() && prefDoc.data().ocultar === true) {
+      localStorage.setItem(prefKey, "1"); // cachear
+      fnIrAlMenu();
+      return;
+    }
+  } catch(e) {
+    // Si falla la lectura, mostrar bienvenida igual
+  }
+  mostrarPantallaBienvenida(uid, fnIrAlMenu);
+}
+
+function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
+  // Inyectar estilos
+  if (!document.getElementById("bienvenida-styles")) {
+    const st = document.createElement("style");
+    st.id = "bienvenida-styles";
+    st.textContent = `
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Lato:wght@300;400;700&display=swap');
+
+      #bienvenida-overlay {
+        position: fixed; inset: 0; z-index: 9999;
+        background: linear-gradient(150deg, #0f1e3c 0%, #1a3665 40%, #1e4080 70%, #163060 100%);
+        display: flex; align-items: center; justify-content: center;
+        padding: 20px;
+        animation: bv-fadein 0.5s ease;
+      }
+      @keyframes bv-fadein { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes bv-slideup { from { opacity: 0; transform: translateY(32px); } to { opacity: 1; transform: translateY(0); } }
+
+      #bienvenida-card {
+        background: rgba(255,255,255,0.04);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 18px;
+        max-width: 680px; width: 100%;
+        padding: 48px 52px 38px;
+        box-shadow: 0 32px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06) inset;
+        animation: bv-slideup 0.55s cubic-bezier(0.22,1,0.36,1) 0.1s both;
+        position: relative; overflow: hidden;
+      }
+      #bienvenida-card::before {
+        content: '';
+        position: absolute; top: -60px; right: -60px;
+        width: 220px; height: 220px;
+        background: radial-gradient(circle, rgba(37,99,235,0.25) 0%, transparent 70%);
+        pointer-events: none;
+      }
+      #bienvenida-card::after {
+        content: '';
+        position: absolute; bottom: -40px; left: -40px;
+        width: 160px; height: 160px;
+        background: radial-gradient(circle, rgba(6,182,212,0.15) 0%, transparent 70%);
+        pointer-events: none;
+      }
+
+      .bv-deco-line {
+        width: 52px; height: 3px;
+        background: linear-gradient(90deg, #3b82f6, #06b6d4);
+        border-radius: 2px; margin: 0 auto 20px;
+      }
+      .bv-logo-badge {
+        display: inline-flex; align-items: center; gap: 10px;
+        background: rgba(37,99,235,0.18);
+        border: 1px solid rgba(59,130,246,0.35);
+        border-radius: 50px; padding: 6px 18px;
+        margin-bottom: 22px;
+      }
+      .bv-logo-text {
+        font-family: 'Lato', sans-serif;
+        font-size: 0.72rem; font-weight: 700;
+        letter-spacing: 2.5px; text-transform: uppercase;
+        color: #93c5fd;
+      }
+      .bv-dot { width: 6px; height: 6px; border-radius: 50%; background: #3b82f6; }
+
+      .bv-title {
+        font-family: 'Playfair Display', Georgia, serif;
+        font-size: 1.9rem; font-weight: 700;
+        color: #f0f6ff;
+        text-align: center;
+        line-height: 1.25;
+        margin-bottom: 28px;
+        letter-spacing: 0.01em;
+      }
+
+      .bv-body {
+        font-family: 'Lato', sans-serif;
+        font-size: 0.97rem; line-height: 1.78;
+        color: rgba(220,235,255,0.88);
+        text-align: left;
+      }
+      .bv-body p { margin-bottom: 16px; }
+      .bv-body p:last-child { margin-bottom: 0; }
+
+      .bv-highlight {
+        color: #93c5fd; font-weight: 700;
+        font-style: italic;
+      }
+
+      .bv-divider {
+        height: 1px; margin: 28px 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+      }
+
+      .bv-closing {
+        font-family: 'Playfair Display', Georgia, serif;
+        font-size: 1.05rem; font-style: italic;
+        color: #bfdbfe;
+        text-align: center; margin-bottom: 4px;
+      }
+      .bv-wishes {
+        font-family: 'Lato', sans-serif;
+        font-size: 0.85rem; color: rgba(147,197,253,0.7);
+        text-align: center;
+        letter-spacing: 0.04em;
+      }
+
+      #bv-btn-aceptar {
+        display: block; width: 100%; margin-top: 30px;
+        padding: 15px 24px;
+        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 50%, #1e40af 100%);
+        color: #fff; border: none; border-radius: 10px;
+        font-family: 'Lato', sans-serif;
+        font-size: 1rem; font-weight: 700;
+        letter-spacing: 1.2px; text-transform: uppercase;
+        cursor: pointer;
+        box-shadow: 0 6px 24px rgba(37,99,235,0.45);
+        transition: all 0.2s ease;
+        position: relative; overflow: hidden;
+      }
+      #bv-btn-aceptar::before {
+        content: '';
+        position: absolute; inset: 0;
+        background: linear-gradient(135deg, rgba(255,255,255,0.1), transparent);
+        opacity: 0; transition: opacity 0.2s;
+      }
+      #bv-btn-aceptar:hover { transform: translateY(-2px); box-shadow: 0 10px 32px rgba(37,99,235,0.55); }
+      #bv-btn-aceptar:hover::before { opacity: 1; }
+      #bv-btn-aceptar:active { transform: translateY(0); }
+
+      .bv-no-mostrar {
+        display: flex; align-items: center; gap: 10px;
+        justify-content: center; margin-top: 18px;
+        cursor: pointer; user-select: none;
+      }
+      .bv-no-mostrar input[type="checkbox"] { display: none; }
+      .bv-checkbox-custom {
+        width: 18px; height: 18px; border-radius: 4px;
+        border: 1.5px solid rgba(147,197,253,0.45);
+        background: rgba(255,255,255,0.06);
+        display: flex; align-items: center; justify-content: center;
+        transition: all 0.15s; flex-shrink: 0;
+      }
+      .bv-no-mostrar:hover .bv-checkbox-custom {
+        border-color: #3b82f6; background: rgba(59,130,246,0.12);
+      }
+      .bv-checkbox-custom.checked {
+        background: #dc2626; border-color: #dc2626;
+      }
+      .bv-checkbox-custom.checked::after {
+        content: '✓'; color: #fff; font-size: 13px; font-weight: 900; line-height: 1;
+      }
+      .bv-no-mostrar-label {
+        font-family: 'Lato', sans-serif;
+        font-size: 0.82rem; color: rgba(147,197,253,0.6);
+        transition: color 0.15s;
+      }
+      .bv-no-mostrar:hover .bv-no-mostrar-label { color: #93c5fd; }
+
+      @media (max-width: 600px) {
+        #bienvenida-card { padding: 32px 24px 28px; }
+        .bv-title { font-size: 1.55rem; }
+        .bv-body { font-size: 0.92rem; }
+      }
+    `;
+    document.head.appendChild(st);
+  }
+
+  // Eliminar overlay anterior si existe (re-login sin recargar página)
+  const overlayViejo = document.getElementById("bienvenida-overlay");
+  if (overlayViejo) overlayViejo.remove();
+
+  // Crear overlay — opacidad inicial 0, fade-in via JS para no bloquear clicks durante la animación CSS
+  const overlay = document.createElement("div");
+  overlay.id = "bienvenida-overlay";
+  overlay.style.opacity = "0";
+  overlay.innerHTML = `
+    <div id="bienvenida-card">
+      <div style="text-align:center;">
+        <div class="bv-logo-badge">
+          <span class="bv-dot"></span>
+          <span class="bv-logo-text">Sistema IAR · Preparación Examen</span>
+          <span class="bv-dot"></span>
+        </div>
+      </div>
+      <div class="bv-deco-line"></div>
+      <div class="bv-title">Antes de comenzar…</div>
+      <div class="bv-body">
+        <p>Este material reúne y organiza diversas experiencias de exámenes recopiladas de distintos medios, presentadas en un formato unificado para facilitar la práctica de preguntas tipo <em>choice</em>. Al final de cada examen se incluyen breves explicaciones de las respuestas, con el objetivo de complementar el proceso de estudio.</p>
+        <p>Dado que se trata de una recopilación basada en aportes de compañeros que han rendido el examen previamente, es posible encontrar errores, enunciados incompletos o explicaciones que no resulten del todo satisfactorias. Por este motivo, se recomienda utilizar este contenido como <strong>material de apoyo</strong>, manteniendo siempre un criterio crítico y complementándolo con apuntes personales u otras fuentes de estudio.</p>
+        <p style="text-align:center; font-size:1.08em;"><span class="bv-highlight">El secreto está en la práctica constante.</span></p>
+      </div>
+      <div class="bv-divider"></div>
+      <div class="bv-closing">Se desea que este recurso resulte de utilidad y acompañe en esta etapa final de la carrera.</div>
+      <div class="bv-wishes">✦ Los mayores éxitos en el examen ✦</div>
+      <button id="bv-btn-aceptar">Ingresar al sistema</button>
+      <div class="bv-no-mostrar" id="bv-label-no-mostrar">
+        <div class="bv-checkbox-custom" id="bv-check-visual"></div>
+        <span class="bv-no-mostrar-label">No volver a mostrar este mensaje</span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  // Fade-in via JS — no bloquea clicks como haría una CSS animation con opacity:0 inicial
+  requestAnimationFrame(function() {
+    overlay.style.transition = "opacity 0.45s ease";
+    overlay.style.opacity = "1";
+  });
+
+  // Toggle checkbox — querySelector sobre el overlay propio para evitar conflictos de IDs con instancias previas
+  let noMostrar = false;
+  const checkVisual = overlay.querySelector("#bv-check-visual");
+  const labelNoMostrar = overlay.querySelector("#bv-label-no-mostrar");
+  labelNoMostrar.addEventListener("click", function(e) {
+    e.stopPropagation();
+    noMostrar = !noMostrar;
+    if (noMostrar) {
+      checkVisual.classList.add("checked");
+    } else {
+      checkVisual.classList.remove("checked");
+    }
+  });
+
+  // Botón aceptar — querySelector sobre el overlay propio
+  const btnAceptar = overlay.querySelector("#bv-btn-aceptar");
+  btnAceptar.addEventListener("click", async function() {
+    if (noMostrar && uid) {
+      try {
+        const prefKey = "bienvenida_oculta_" + uid;
+        await setDoc(doc(db, "config", prefKey), { ocultar: true, uid: uid, fecha: new Date().toISOString() });
+        localStorage.setItem(prefKey, "1");
+      } catch(e) {
+        // Si falla guardar, igual continuar
+      }
+    }
+    // Animar salida
+    overlay.style.transition = "opacity 0.35s ease";
+    overlay.style.opacity = "0";
+    setTimeout(function() {
+      overlay.remove();
+      fnIrAlMenu();
+    }, 350);
+  });
 }
 
 // ======== BARRA INFERIOR ESTÁTICA ========
@@ -2646,7 +2913,7 @@ onAuthStateChanged(auth, async (user) => {
       if (snap.exists() && snap.data().deviceId === deviceId) {
         // Proveer instancia de Firestore a script.js
         if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
-        ocultarLogin(true);
+        ocultarLogin(true, user.uid);
         if (licencia.esDemo) aplicarRestriccionesDemo();
         _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
         mostrarBarraSesion(user.email, licencia);
@@ -2668,7 +2935,7 @@ onAuthStateChanged(auth, async (user) => {
           await setDoc(sessionRef, { deviceId, email: user.email, loginAt: serverTimestamp(), lastActivity: serverTimestamp() });
           // Proveer instancia de Firestore a script.js
           if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
-          ocultarLogin(true);
+          ocultarLogin(true, user.uid);
           if (licencia.esDemo) aplicarRestriccionesDemo();
           _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
           mostrarBarraSesion(user.email, licencia);
@@ -2689,7 +2956,7 @@ onAuthStateChanged(auth, async (user) => {
         await setDoc(sessionRef, { deviceId, email: user.email, loginAt: serverTimestamp(), lastActivity: serverTimestamp() });
         // Proveer instancia de Firestore a script.js
         if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
-        ocultarLogin(true);
+        ocultarLogin(true, user.uid);
         if (licencia.esDemo) aplicarRestriccionesDemo();
         mostrarBarraSesion(user.email, licencia);
         iniciarMonitoreoSesion(user);
