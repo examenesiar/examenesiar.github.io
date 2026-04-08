@@ -9,7 +9,7 @@ if (typeof preguntasPorSeccion === 'undefined') {
 // En servidor local usa ruta relativa; en producción apunta a GitHub Pages.
 const IMAGENES_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.startsWith('192.168.'))
   ? ''
-  : 'https://examenesiaruba.github.io/';
+  : 'https://examenesiar.github.io/';
 
 function getImagenUrl(path) {
   if (!path) return '';
@@ -3059,7 +3059,7 @@ function getImagenUrl(path) {
         document.getElementById('sim-dlg-salir').onclick = function() {
           dlg.remove();
           _limpiarSimulacroIARSinProgreso();
-          window.location.href = 'https://examenesiaruba.github.io/#menu';
+          window.location.href = 'https://examenesiar.github.io/#menu';
         };
         document.getElementById('sim-dlg-reiniciar').onclick = function() {
           dlg.remove();
@@ -4015,7 +4015,7 @@ function getImagenUrl(path) {
     document.getElementById('sim-to-salir').onclick = function() {
       overlay.remove();
       if (typeof _limpiarSimulacroIARSinProgreso === 'function') _limpiarSimulacroIARSinProgreso();
-      window.location.href = 'https://examenesiaruba.github.io/#menu';
+      window.location.href = 'https://examenesiar.github.io/#menu';
     };
 
     document.getElementById('sim-to-reiniciar').onclick = function() {
