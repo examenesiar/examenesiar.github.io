@@ -30,11 +30,11 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const rtdb = getDatabase(app);
 
-const ADMIN_EMAIL = "micro2020uba@gmail.com";
-const CONTACTO_EMAIL = "examenesiaruba@gmail.com";
+const ADMIN_EMAIL = "admin.14r@gmail.com";
+const CONTACTO_EMAIL = "examenesiar@gmail.com";
 
 // ======== DEMO ========
-const DEMO_SECCIONES_PERMITIDAS = ["iarsep2020", "iaroct2020"];
+const DEMO_SECCIONES_PERMITIDAS = ["iarsep2020", "iaroct2020", "iarnov2020", "iardic2020"];
 const DEMO_DIAS = 3;
 window._demoCheckEnabled = false;
 window._demoSeccionesPermitidas = DEMO_SECCIONES_PERMITIDAS;
