@@ -859,7 +859,7 @@ function getImagenUrl(path) {
   // ======== Helper: leer si una sección tiene progreso en localStorage ========
   // IMPORTANTE: script_onebyone.js escribe en quiz_state_v3 directamente
   // sin actualizar el objeto `state` en memoria. Por eso hay que leer desde localStorage.
-  function _hayProgresoEnStorage(seccionId) {
+function _hayProgresoEnStorage(seccionId) {
     if (!seccionId) return false;
     try {
       var raw = localStorage.getItem('quiz_state_v3');
@@ -867,8 +867,9 @@ function getImagenUrl(path) {
       var all = JSON.parse(raw);
       var s = all[seccionId];
       if (!s) return false;
-      // Si totalShown=true y NO hay graded ni answers, no hay progreso real
-      // (estado huérfano tras completar y volver)
+      // Si el examen ya fue completado (totalShown=true), no hay progreso "en curso"
+      // que requiera advertencia al salir
+      if (s.totalShown) return false;
       var hayGraded = s.graded && Object.keys(s.graded).some(function(k){ return s.graded[k]; });
       if (hayGraded) return true;
       var hayAnswers = s.answers && Object.keys(s.answers).some(function(k){
@@ -1547,11 +1548,25 @@ function getImagenUrl(path) {
     } catch(e) {}
     saveJSON(STORAGE_KEY, state);
 
-    // ======= AUTO-CHECKMARK: marcar el ☑ en el submenú al completar =======
+// ======= AUTO-CHECKMARK: marcar el ☑ en el submenú al completar =======
     (function autoMarcarCompletado(sid) {
       try {
         var uid = window._firebaseUID;
-        if (!uid) return;
+        // Si el UID aún no está disponible, reintentar cada 500ms hasta 3 segundos
+        if (!uid) {
+          var intentos = 0;
+          var intervalo = setInterval(function() {
+            uid = window._firebaseUID;
+            intentos++;
+            if (uid) {
+              clearInterval(intervalo);
+              autoMarcarCompletado(sid);
+            } else if (intentos >= 6) {
+              clearInterval(intervalo);
+            }
+          }, 500);
+          return;
+        }
         var completedKey = 'iar_completed_v1_fs_' + uid;
         var completed = {};
         try { completed = JSON.parse(localStorage.getItem(completedKey) || '{}'); } catch(e) {}
