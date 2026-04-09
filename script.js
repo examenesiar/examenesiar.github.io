@@ -2232,8 +2232,8 @@ function _hayProgresoEnStorage(seccionId) {
     const titulo = document.createElement('div');
     titulo.className = 'nav-bar-titulo';
     titulo.textContent = navBarModo === 'respuestas'
-      ? '📅 ACCESO RÁPIDO - EXÁMENES IAR - RESPUESTAS CORRECTAS'
-      : '📅 ACCESO RÁPIDO - EXÁMENES IAR - CUESTIONARIOS';
+      ? '📅 ACCESO RÁPIDO A RESPUESTAS CORRECTAS'
+      : '📅 ACCESO RÁPIDO A EXÁMENES IAR';
     bar.appendChild(titulo);
 
     // Una sola fila con wrap — año + botones fluyen juntos
