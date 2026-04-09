@@ -1598,16 +1598,29 @@ function _hayProgresoEnStorage(seccionId) {
     })(seccionId);
     // ======= FIN AUTO-CHECKMARK =======
 
-    attemptLog.push({
-      sectionId: seccionId,
-      sectionTitle: getSectionTitle(seccionId),
-      iso: todayISO(),
-      score: totalScore,
-      total: preguntas.length
+// Guardia anti-duplicado por tiempo: no registrar si ya existe una entrada
+    // para esta misma sección hace menos de 3 minutos.
+    // Cubre el caso de recargar la página al terminar sin penalizar intentos reales
+    // (un usuario tarda mínimo 5-20 min en resolver un cuestionario).
+    var ahoraMs = Date.now();
+    var VENTANA_MS = 3 * 60 * 1000; // 3 minutos en milisegundos
+    var yaRegistrado = attemptLog.some(function(entry) {
+      if (entry.sectionId !== seccionId) return false;
+      var entryMs = entry.iso ? new Date(entry.iso).getTime() : 0;
+      return (ahoraMs - entryMs) < VENTANA_MS;
     });
-    saveJSON(ATTEMPT_LOG_KEY, attemptLog);
-    // Guardar historial en Firestore
-    _guardarHistorialFirestore();
+    if (!yaRegistrado) {
+      attemptLog.push({
+        sectionId: seccionId,
+        sectionTitle: getSectionTitle(seccionId),
+        iso: todayISO(),
+        score: totalScore,
+        total: preguntas.length
+      });
+      saveJSON(ATTEMPT_LOG_KEY, attemptLog);
+      // Guardar historial en Firestore
+      _guardarHistorialFirestore();
+    }
 
     // Actualizar colores de la barra de navegación inferior
     if (typeof renderNavBar === 'function') renderNavBar();
