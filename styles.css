@@ -1,14 +1,14 @@
-/* ===== VARIABLES - PALETA PROFESIONAL AZUL OSCURO Y GRIS ===== */
+
 :root {
-    /* Paleta principal - azul marino */
-    --primary-color: #2563eb;        /* Azul principal */
-    --primary-hover: #1d4ed8;        /* Azul hover */
-    --primary-light: #dbeafe;        /* Azul muy claro */
-    --primary-dark: #1e3a8a;         /* Azul marino oscuro */
-    --header-gradient-start: #1e3a8a; /* Inicio degradado header */
-    --header-gradient-end: #1e40af;   /* Final degradado header */
     
-    /* Escala de grises */
+    --primary-color: #2563eb;        
+    --primary-hover: #1d4ed8;        
+    --primary-light: #dbeafe;        
+    --primary-dark: #1e3a8a;         
+    --header-gradient-start: #1e3a8a; 
+    --header-gradient-end: #1e40af;   
+    
+    
     --black: #000000;
     --gray-900: #0f172a;
     --gray-800: #1e293b;
@@ -22,7 +22,7 @@
     --gray-50: #f8fafc;
     --white: #ffffff;
     
-    /* Colores de estado */
+    
     --success-color: #10b981;
     --success-light: #d1fae5;
     --error-color: #dc2626;
@@ -30,27 +30,26 @@
     --warning-color: #d97706;
     --warning-light: #fef3c7;
     
-    /* Textos */
+    
     --text-primary: #1f2937;
     --text-secondary: #475569;
     --text-tertiary: #94a3b8;
     
-    /* Sombras - sutiles y profesionales */
+    
     --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
     --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
     --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
     
-    /* Bordes */
+    
     --border-radius: 4px;
     --border-radius-lg: 6px;
     
-    /* Transiciones */
+    
     --transition: all 0.15s ease;
 }
 
-/* ===== RESET Y BASE ===== */
 * {
     box-sizing: border-box;
     margin: 0;
@@ -67,7 +66,6 @@ body {
     padding: 0;
 }
 
-/* ===== CONTAINER ===== */
 .menu-principal {
     display: block;
     max-width: 1400px;
@@ -104,7 +102,6 @@ body {
     display: none;
 }
 
-/* ===== CONTAINER ===== */
 .container {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -112,7 +109,6 @@ body {
     margin-bottom: 40px;
 }
 
-/* ===== COLUMNAS ===== */
 .columna {
     background: var(--white);
     padding: 24px 20px;
@@ -126,7 +122,6 @@ body {
     box-shadow: var(--shadow);
 }
 
-/* Header de columna */
 .columna-header {
     margin-bottom: 18px;
     padding-bottom: 10px;
@@ -149,7 +144,6 @@ body {
     margin-top: 24px;
 }
 
-/* ===== LISTA DE ESPECIALIDADES ===== */
 .especialidades-list {
     list-style: none;
     padding: 0;
@@ -191,7 +185,6 @@ body {
     margin: 0;
 }
 
-/* Badge NUEVO */
 .badge-nuevo {
     background: var(--success-color);
     color: var(--white);
@@ -204,7 +197,6 @@ body {
     margin-left: 8px;
 }
 
-/* ===== PÁGINAS DE CUESTIONARIOS ===== */
 .pagina-cuestionario {
     display: none;
     max-width: 900px;
@@ -228,7 +220,6 @@ body {
     }
 }
 
-/* Título principal del cuestionario */
 .pagina-cuestionario > h1 {
     background: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary-color) 100%);
     color: var(--white);
@@ -258,7 +249,6 @@ body {
         transparent 100%);
 }
 
-/* Header del cuestionario */
 .cuestionario-header {
     background: var(--white);
     padding: 28px;
@@ -277,7 +267,6 @@ body {
     margin: 0 0 20px 0;
 }
 
-/* Barra de progreso */
 .progreso-bar {
     height: 6px;
     background: var(--gray-200);
@@ -293,7 +282,6 @@ body {
     width: 0%;
 }
 
-/* ===== BOTÓN VOLVER ===== */
 .btn-volver {
     background: linear-gradient(135deg, var(--primary-color) 0%, var(--primary-hover) 100%);
     color: var(--white);
@@ -322,7 +310,6 @@ body {
     box-shadow: var(--shadow-sm);
 }
 
-/* ===== PREGUNTAS ===== */
 .pregunta {
     margin-bottom: 20px;
     padding: 24px;
@@ -346,7 +333,6 @@ body {
     line-height: 1.6;
 }
 
-/* Resultado de pregunta */
 .resultado-pregunta {
     font-weight: 600;
     font-size: 0.875rem;
@@ -366,7 +352,6 @@ body {
     color: var(--error-color);
 }
 
-/* ===== OPCIONES ===== */
 .opcion {
     margin: 8px 0;
     display: flex;
@@ -380,8 +365,6 @@ body {
     font-size: 0.9375rem;
 }
 
-/* Texto de la opción: ocupa el espacio restante y maneja word-break
-   para que el mark del buscador no rompa la palabra como flex-item */
 .opcion-texto {
     flex: 1;
     word-break: break-word;
@@ -417,7 +400,6 @@ body {
     color: var(--error-color);
 }
 
-/* Inputs personalizados */
 .opcion input[type="radio"],
 .opcion input[type="checkbox"] {
     appearance: none;
@@ -473,7 +455,6 @@ body {
     transform: translate(-50%, -50%);
 }
 
-/* ===== BOTONES ===== */
 .btn-responder,
 .pregunta button {
     padding: 10px 20px;
@@ -508,7 +489,6 @@ body {
     background: var(--gray-700);
 }
 
-/* ===== EXPLICACIONES ===== */
 .explicacion {
     margin-top: 16px;
     padding: 16px;
@@ -542,7 +522,6 @@ body {
     color: var(--text-primary);
 }
 
-/* ===== RESULTADO FINAL ===== */
 .resultado-final {
     background: var(--white);
     padding: 32px;
@@ -567,7 +546,6 @@ body {
     margin: 10px 0;
 }
 
-/* ===== INFO EXTRA ===== */
 .info-extra {
     margin-top: 40px;
     text-align: center;
@@ -599,7 +577,6 @@ body {
     text-decoration: underline;
 }
 
-/* ===== SCROLLBAR ===== */
 ::-webkit-scrollbar {
     width: 10px;
 }
@@ -617,7 +594,6 @@ body {
     background: var(--primary-hover);
 }
 
-/* ===== SELECCIÓN DE TEXTO ===== */
 ::selection {
     background: var(--primary-light);
     color: var(--primary-dark);
@@ -628,7 +604,6 @@ body {
     color: var(--primary-dark);
 }
 
-/* ===== RESPONSIVIDAD ===== */
 @media (max-width: 768px) {
     .menu-principal h1 {
         font-size: 2rem;
@@ -706,7 +681,6 @@ body {
     }
 }
 
-/* ===== ESTILOS PARA IMPRESIÓN (BLOQUEADO) ===== */
 @media print {
     * {
         display: none !important;
@@ -722,7 +696,6 @@ body {
     }
 }
 
-/* ===== UTILIDADES ===== */
 .no-select {
     -webkit-user-select: none;
     -moz-user-select: none;
@@ -741,7 +714,6 @@ img {
     pointer-events: none;
 }
 
-/* ===== BUSCADOR DE PREGUNTAS ===== */
 .btn-buscador {
     background: linear-gradient(135deg, #2563eb 0%, #2563eb 100%);
     color: white; border: none; padding: 14px 32px; border-radius: 10px;
@@ -785,7 +757,6 @@ img {
 }
 .buscador-highlight { animation: buscadorPulse 0.7s ease-out 2; border-left: 4px solid #2563eb !important; }
 
-/* ===== HIGHLIGHT AMARILLO PARA TEXTO BUSCADO ===== */
 .buscador-texto-highlight {
   background-color: #ffe066;
   color: #1a1a1a;
@@ -794,7 +765,6 @@ img {
   font-weight: 700;
 }
 
-/* ===== BOTONES DE NAVEGACIÓN IAR ===== */
 .btn-nav-home {
   padding: 11px 14px !important;
   font-size: 1.1rem !important;
@@ -832,11 +802,8 @@ img {
   transform: translateY(-2px) !important;
 }
 
-/* ===== BUSCADOR DE PREGUNTAS ===== */
-
 .buscador-container { max-width: 860px; margin: 0 auto; padding: 10px 0 48px; }
 
-/* Campo de búsqueda */
 .buscador-input-wrap { position: relative; display: flex; align-items: center; margin-bottom: 14px; }
 .buscador-input {
     width: 100%; padding: 15px 52px 15px 20px;
@@ -858,7 +825,6 @@ img {
 }
 .buscador-limpiar:hover { color: #dc2626; background: #fee2e2; }
 
-/* Barra de estadísticas */
 .buscador-stats {
     font-size: 0.85rem; color: #1e40af; margin-bottom: 18px;
     padding: 9px 14px; background: linear-gradient(90deg, #dbeafe 0%, #eff6ff 100%);
@@ -867,10 +833,8 @@ img {
     display: flex; align-items: center; gap: 6px;
 }
 
-/* Lista de resultados */
 .buscador-resultados { display: flex; flex-direction: column; gap: 10px; }
 
-/* Encabezados de grupo */
 .buscador-grupo-titulo {
     font-size: 0.73rem; font-weight: 800; letter-spacing: 0.1em;
     text-transform: uppercase; padding: 7px 14px; border-radius: 8px;
@@ -885,7 +849,6 @@ img {
     color: #92400e; border-left: 4px solid #f59e0b;
 }
 
-/* ── Tarjeta base ── */
 .buscador-card {
     background: #fff;
     border-radius: 12px;
@@ -905,12 +868,10 @@ img {
 .buscador-card.tipo-enunciado { border-left: 4px solid #3b82f6; }
 .buscador-card.tipo-opcion    { border-left: 4px solid #f59e0b; }
 
-/* ── Meta: badges y flecha ── */
 .buscador-card-meta {
     display: flex; align-items: center; gap: 7px; margin-bottom: 9px; flex-wrap: wrap;
 }
 
-/* Badge tipo (Enunciado / Opción) */
 .badge-tipo {
     font-size: 0.68rem; font-weight: 800; padding: 3px 10px;
     border-radius: 20px; letter-spacing: 0.06em; text-transform: uppercase;
@@ -918,19 +879,16 @@ img {
 .badge-tipo.enunciado { background: #dbeafe; color: #1d4ed8; }
 .badge-tipo.opcion    { background: #fef3c7; color: #b45309; }
 
-/* Badge examen */
 .badge-examen {
     font-size: 0.73rem; font-weight: 700; padding: 3px 10px;
     border-radius: 20px; background: #f1f5f9; color: #334155;
     border: 1px solid #cbd5e1;
 }
 
-/* Badge número de pregunta */
 .badge-pregunta {
     font-size: 0.73rem; color: #64748b; font-weight: 500;
 }
 
-/* Flecha "ir" — aparece con hover */
 .badge-ir {
     margin-left: auto;
     font-size: 0.78rem; color: #2563eb; font-weight: 700;
@@ -940,7 +898,6 @@ img {
 }
 .buscador-card:hover .badge-ir { opacity: 1; transform: translateX(3px); }
 
-/* Texto con resaltado */
 .buscador-card-texto {
     font-size: 0.93rem; color: #1f2937; line-height: 1.6; margin-bottom: 4px;
 }
@@ -949,17 +906,14 @@ img {
     border-radius: 3px; padding: 1px 3px; font-weight: 700;
 }
 
-/* Referencia al enunciado (en tarjetas de opción) */
 .buscador-card-enunciado-ref {
     font-size: 0.80rem; color: #64748b; margin-top: 8px; padding-top: 8px;
     border-top: 1px dashed #e2e8f0; font-style: italic; line-height: 1.45;
 }
 
-/* Estado vacío / mensajes */
 .buscador-vacio { text-align: center; padding: 48px 20px; color: #94a3b8; font-size: 1rem; }
 .buscador-vacio-icon { font-size: 2.8rem; margin-bottom: 12px; }
 
-/* ── Tarjetas VISITADAS ── */
 .buscador-card-visitada {
     background: #f8faff !important;
     border-color: #bfdbfe !important;
@@ -974,14 +928,12 @@ img {
     border-color: #7dd3fc !important;
 }
 
-/* Badge ✓ Visitada */
 .badge-visitada {
     font-size: 0.68rem; font-weight: 800; padding: 3px 9px; border-radius: 20px;
     background: #dcfce7; color: #166534; letter-spacing: 0.04em;
     border: 1px solid #bbf7d0;
 }
 
-/* Tooltip "Ya visitaste esta pregunta" al hacer hover sobre tarjeta visitada */
 .buscador-card-visitada {
     position: relative;
 }
@@ -1024,7 +976,6 @@ img {
     transform: translateX(-50%) scale(1);
 }
 
-/* ── Tarjetas DEMO restringidas ── */
 .buscador-card-demo-restringida {
     background: #fafafa !important;
     border-color: #e2e8f0 !important;
@@ -1059,7 +1010,6 @@ img {
     display: inline-flex; align-items: center; gap: 4px;
 }
 
-/* ===== CHECKMARKS CUESTIONARIOS IAR ===== */
 .iar-check-label {
     display: inline-flex; align-items: center; gap: 4px;
     margin-left: auto; flex-shrink: 0;
@@ -1079,7 +1029,6 @@ img {
 }
 .iar-check-input:checked + .iar-check-icon { color: #10b981; }
 
-/* Li marcado como completado */
 .columna ul li.iar-completado {
     background: linear-gradient(90deg, #d1fae5 0%, #ecfdf5 100%) !important;
     border-color: #6ee7b7 !important;
@@ -1091,7 +1040,6 @@ img {
     border-color: #34d399 !important;
 }
 
-/* ===== BARRA DE NAVEGACIÓN INFERIOR IAR (estática, al pie del cuestionario) ===== */
 #nav-bar-inferior,
 .nav-bar-inferior-static {
     display: none;
@@ -1119,7 +1067,6 @@ img {
     margin-bottom: 2px;
 }
 
-/* Fila de items: año + botones, con wrap */
 .nav-bar-fila {
     display: flex;
     flex-wrap: wrap;
@@ -1128,9 +1075,8 @@ img {
     justify-content: space-evenly;
 }
 
-/* El grupo de año es simplemente inline dentro del flex wrap */
 .nav-bar-grupo {
-    display: contents; /* los hijos participan directamente en el flex padre */
+    display: contents; 
 }
 
 .nav-bar-year {
@@ -1146,14 +1092,12 @@ img {
     margin-left: 4px;
 }
 
-/* Primer año sin separador a la izquierda */
 .nav-bar-fila .nav-bar-year:first-child {
     border-left: none;
     margin-left: 0;
     padding-left: 0;
 }
 
-/* Todos los botones del mismo tamaño fijo */
 .nav-bar-btn {
     width: 46px;
     padding: 5px 0;
@@ -1183,7 +1127,6 @@ img {
     transform: translateY(0);
 }
 
-/* Botón completado — pintado en verde como el ☑ del submenú */
 .nav-bar-btn-completado {
     background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
     border-color: #34d399 !important;
@@ -1207,9 +1150,6 @@ img {
     }
 }
 
-/* ===== PANEL VER RESPUESTAS CORRECTAS ===== */
-
-/* Botón del menú principal */
 .btn-respuestas {
     background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
     box-shadow: 0 4px 14px rgba(5,150,105,0.35) !important;
@@ -1218,7 +1158,6 @@ img {
     background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
 }
 
-/* Índice de años */
 .rc-indice {
     display: flex;
     flex-wrap: wrap;
@@ -1249,7 +1188,6 @@ img {
     transform: translateY(-1px);
 }
 
-/* Cabecera de año */
 .rc-year-header {
     background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
     color: #fff;
@@ -1262,7 +1200,6 @@ img {
     box-shadow: 0 3px 10px rgba(13,116,144,0.25);
 }
 
-/* Bloque de un examen */
 .rc-examen-bloque {
     margin-bottom: 32px;
     border-radius: 10px;
@@ -1280,7 +1217,6 @@ img {
     text-transform: uppercase;
 }
 
-/* Pregunta individual */
 .rc-pregunta {
     background: #fff;
     padding: 18px 20px 14px;
@@ -1302,7 +1238,6 @@ img {
     margin-bottom: 12px;
 }
 
-/* Imagen de pregunta */
 .rc-imagen {
     max-width: 100%;
     height: auto;
@@ -1313,7 +1248,6 @@ img {
     cursor: pointer;
 }
 
-/* Opciones */
 .rc-opcion {
     display: flex;
     align-items: flex-start;
@@ -1348,7 +1282,6 @@ img {
     color: #059669;
 }
 
-/* Badge tipo de pregunta */
 .rc-badge-tipo {
     display: inline-block;
     font-size: 0.72rem;
@@ -1361,7 +1294,6 @@ img {
     letter-spacing: 0.03em;
 }
 
-/* Botón explicación */
 .rc-btn-explicacion {
     margin-top: 10px;
     padding: 6px 14px;
@@ -1380,7 +1312,6 @@ img {
     color: #2563eb;
 }
 
-/* Contenido de explicación */
 .rc-explicacion {
     margin-top: 10px;
     padding: 12px 16px;
@@ -1400,7 +1331,6 @@ img {
     .rc-opcion { font-size: 0.84rem; }
 }
 
-/* ===== BARRA DE SESIÓN INFERIOR (permanente) ===== */
 #barra-sesion {
     position: fixed;
     bottom: 0;
@@ -1481,7 +1411,6 @@ img {
 }
 #btn-abrir-admin:hover { background: rgba(251,191,36,.9); }
 
-/* Subir el botón "Ver mi progreso" para que no quede tapado por la barra */
 #btn-ver-progreso {
     bottom: 54px !important;
 }
@@ -1489,9 +1418,6 @@ img {
     bottom: 110px !important;
 }
 
-/* ============================================================
-   BADGE USUARIOS EN LÍNEA
-   ============================================================ */
 .badge-online-count {
   display: inline-flex;
   align-items: center;
@@ -1503,9 +1429,6 @@ img {
   white-space: nowrap;
 }
 
-/* ============================================================
-   CHAT FLOTANTE
-   ============================================================ */
 #btn-chat-flotante {
   position: fixed;
   bottom: 120px;
@@ -1528,7 +1451,6 @@ img {
 #btn-chat-flotante:hover { transform: scale(1.08); background: linear-gradient(135deg, #2563eb, #1e3a8a); }
 #btn-chat-flotante.chat-abierto { background: linear-gradient(135deg, #475569, #334155); }
 
-/* Badge "nuevo mensaje" */
 #btn-chat-flotante[data-nuevos]::after {
   content: attr(data-nuevos);
   position: absolute;
@@ -1690,7 +1612,6 @@ img {
   width: 100%;
 }
 
-/* Responsivo: en pantallas chicas el chat ocupa casi toda la pantalla */
 @media (max-width: 400px) {
   #chat-ventana {
     width: calc(100vw - 20px);
@@ -1699,3 +1620,4 @@ img {
     max-height: 60vh;
   }
 }
+
