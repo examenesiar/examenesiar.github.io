@@ -1578,7 +1578,7 @@
   // ============================================================
   const _COM_PROHIBIDAS = [
     // INSULTOS DIRECTOS
-    'pelotudo', 'boludo', 'forro', 'hijodeputa', 'puta', 'puto',
+    'pelotudo', 'boludo', 'forro', 'hijodeputa', 'puta', 'puto','estupido','es tupido','Estupido',
     'choto', 'zorra', 'gil', 'tarado', 'mogolico', 'trolo',
     'marica', 'maricon', 'sorete', 'cagon', 'mierda', 'lacra',
     'escoria', 'basura', 'rata', 'chancho', 'cerdo', 'perro', 'buitre', 'alimaña',
