@@ -1178,9 +1178,12 @@
       if (all[seccionId]) { all[seccionId].totalShown = true; localStorage.setItem('quiz_state_v3', JSON.stringify(all)); }
     } catch(e) {}
 
+// Registrar intento usando oav-wrapper como guardia cuando resultado-total no existe
     const resultNode = document.getElementById('resultado-total-' + seccionId);
-    if (resultNode && !resultNode.dataset.oavFired) {
-      resultNode.dataset.oavFired = '1';
+    const wrapperNode = document.getElementById('oav-wrapper-' + seccionId);
+    const guardaNode = resultNode || wrapperNode;
+    if (guardaNode && !guardaNode.dataset.oavFired) {
+      guardaNode.dataset.oavFired = '1';
       if (typeof window.mostrarResultadoFinal === 'function') {
         window.mostrarResultadoFinal(seccionId);
       }
