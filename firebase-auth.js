@@ -30,6 +30,30 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const rtdb = getDatabase(app);
 
+// ── BLOQUEO INMEDIATO DE PANTALLA ───────────────────────────────────────────
+// Cubre la pantalla con un overlay opaco mientras Firebase inicializa.
+// Garantiza que el usuario nunca vea el contenido sin haber pasado por el login.
+// Se remueve en mostrarLogin(), mostrarPantallaBienvenida() o mostrarLicenciaVencida().
+(function() {
+  function _insertarBloq() {
+    if (document.getElementById('auth-bloq-inicial')) return;
+    const bloq = document.createElement('div');
+    bloq.id = 'auth-bloq-inicial';
+    bloq.style.cssText = 'position:fixed;inset:0;z-index:999998;' +
+      'background:linear-gradient(135deg,#1a56a0 0%,#1e3a8a 100%);' +
+      'display:flex;align-items:center;justify-content:center;';
+    bloq.innerHTML = '<div style="width:36px;height:36px;border:3px solid rgba(255,255,255,.25);' +
+      'border-top-color:#fff;border-radius:50%;animation:_spin .75s linear infinite;"></div>' +
+      '<style>@keyframes _spin{to{transform:rotate(360deg)}}</style>';
+    document.body.appendChild(bloq);
+  }
+  if (document.body) {
+    _insertarBloq();
+  } else {
+    document.addEventListener('DOMContentLoaded', _insertarBloq, { once: true });
+  }
+})();
+
 const ADMIN_EMAIL = "admin.14r@gmail.com";
 const CONTACTO_EMAIL = "examenesiar@gmail.com";
 
@@ -49,6 +73,12 @@ window._licenciaVerificada = new Promise(function(resolve) {
 
 // Licencia en memoria (se llena al autenticar)
 let licenciaActual = null;
+
+// Bandera en memoria (no persiste en recargas): true SOLO cuando el usuario
+// presionó "INGRESAR AL SISTEMA" o "Crear cuenta DEMO gratis".
+// Si la página se recarga (F5/Ctrl+R), esta variable vuelve a false y
+// onAuthStateChanged mostrará el login en lugar de entrar directo al menú.
+let _sesionIniciadaManualmente = false;
 
 // Listener en tiempo real de solicitudes pendientes
 let _solicitudesUnsubscribe = null;
@@ -169,28 +199,28 @@ function inyectarEstilos() {
       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
     }
     .login-box {
-      background:#fff;border-radius:16px;padding:36px 32px 28px;
-      width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.3);
-      text-align:center;margin:16px;
+      background:#fff;border-radius:16px;padding:22px 24px 18px;
+      width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.3);
+      text-align:center;margin:12px;max-height:95vh;overflow-y:auto;
     }
-    .login-logo { font-size:3rem;font-weight:900;color:#0d7490;letter-spacing:4px;margin-bottom:6px; }
-    .login-subtitle { font-size:.85rem;color:#64748b;margin-bottom:24px;line-height:1.4; }
-    .login-field { text-align:left;margin-bottom:14px; }
+    .login-logo { font-size:2.2rem;font-weight:900;color:#0d7490;letter-spacing:4px;margin-bottom:4px; }
+    .login-subtitle { font-size:.8rem;color:#64748b;margin-bottom:16px;line-height:1.4; }
+    .login-field { text-align:left;margin-bottom:10px; }
     .login-field label {
       display:block;font-size:.82rem;font-weight:600;color:#475569;
       margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;
     }
     .login-field input {
-      width:100%;padding:11px 14px;border:1.5px solid #cbd5e1;border-radius:8px;
-      font-size:.95rem;color:#1f2937;outline:none;transition:border-color .15s;
+      width:100%;padding:9px 12px;border:1.5px solid #cbd5e1;border-radius:8px;
+      font-size:.88rem;color:#1f2937;outline:none;transition:border-color .15s;
       -webkit-user-select:text!important;user-select:text!important;box-sizing:border-box;
     }
     .login-field input:focus { border-color:#0d7490;box-shadow:0 0 0 3px rgba(13,116,144,.12); }
     .login-btn {
-      width:100%;padding:12px;
+      width:100%;padding:10px;
       background:linear-gradient(135deg,#0d7490 0%,#0891b2 100%);
-      color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:700;
-      cursor:pointer;margin-top:6px;transition:all .15s;
+      color:#fff;border:none;border-radius:8px;font-size:.92rem;font-weight:700;
+      cursor:pointer;margin-top:4px;transition:all .15s;
     }
     .login-btn:hover { background:linear-gradient(135deg,#0891b2,#06b6d4);transform:translateY(-1px); }
     .login-btn:disabled { opacity:.6;cursor:not-allowed;transform:none; }
@@ -221,8 +251,8 @@ function inyectarEstilos() {
     /* ── Barra inferior estática — estilos en styles.css ── */
 
     /* ── Tabs login/registro ── */
-    .login-tabs { display:flex;gap:0;margin-bottom:20px;border-radius:10px;overflow:hidden;border:1.5px solid #e2e8f0; }
-    .login-tab { flex:1;padding:10px;background:#f8fafc;color:#64748b;font-size:.88rem;font-weight:600;cursor:pointer;border:none;transition:all .15s; }
+    .login-tabs { display:flex;gap:0;margin-bottom:14px;border-radius:10px;overflow:hidden;border:1.5px solid #e2e8f0; }
+    .login-tab { flex:1;padding:8px;background:#f8fafc;color:#64748b;font-size:.82rem;font-weight:600;cursor:pointer;border:none;transition:all .15s; }
     .login-tab.activo { background:#0d7490;color:#fff; }
     .login-tab:hover:not(.activo) { background:#e2e8f0; }
     .demo-banner { background:linear-gradient(135deg,#d1fae5,#a7f3d0);border:1.5px solid #6ee7b7;border-radius:10px;padding:12px 14px;margin-bottom:16px;text-align:left; }
@@ -237,11 +267,11 @@ function inyectarEstilos() {
       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
       padding:16px;box-sizing:border-box;
     }
-    .demo-restriccion-box { background:#fff;border-radius:14px;padding:22px 20px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.35);text-align:center;max-height:90vh;overflow-y:auto; }
-    .demo-restriccion-icon { font-size:2.8rem;margin-bottom:10px; }
-    .demo-restriccion-titulo { font-size:1.2rem;font-weight:800;color:#d97706;margin-bottom:10px; }
-    .demo-restriccion-msg { font-size:.92rem;color:#475569;line-height:1.6;margin-bottom:16px; }
-    .demo-restriccion-email { display:inline-block;background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:8px;padding:8px 16px;font-weight:700;color:#0d7490;font-size:.95rem;margin-bottom:20px;word-break:break-all; }
+    .demo-restriccion-box { background:#fff;border-radius:14px;padding:16px 16px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,.35);text-align:center;max-height:92vh;overflow-y:auto; }
+    .demo-restriccion-icon { font-size:2rem;margin-bottom:6px; }
+    .demo-restriccion-titulo { font-size:1rem;font-weight:800;color:#d97706;margin-bottom:6px; }
+    .demo-restriccion-msg { font-size:.82rem;color:#475569;line-height:1.5;margin-bottom:10px; }
+    .demo-restriccion-email { display:inline-block;background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:8px;padding:6px 12px;font-weight:700;color:#0d7490;font-size:.85rem;margin-bottom:14px;word-break:break-all; }
     .demo-plan-row { display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #e2e8f0;font-size:.88rem; }
     .demo-plan-row:last-child { border-bottom:none; }
     .demo-plan-nombre { color:#334155;font-weight:600; }
@@ -264,16 +294,16 @@ function inyectarEstilos() {
       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
     }
     .lv-box {
-      background:#fff;border-radius:16px;padding:40px 36px;
-      width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.3);
-      text-align:center;margin:16px;
+      background:#fff;border-radius:16px;padding:22px 24px 18px;
+      width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.3);
+      text-align:center;margin:12px;max-height:92vh;overflow-y:auto;
     }
-    .lv-icon { font-size:3rem;margin-bottom:12px; }
-    .lv-titulo { font-size:1.4rem;font-weight:800;color:#dc2626;margin-bottom:12px; }
-    .lv-msg { font-size:.95rem;color:#475569;line-height:1.6;margin-bottom:8px; }
+    .lv-icon { font-size:2.2rem;margin-bottom:8px; }
+    .lv-titulo { font-size:1.15rem;font-weight:800;color:#dc2626;margin-bottom:8px; }
+    .lv-msg { font-size:.85rem;color:#475569;line-height:1.5;margin-bottom:6px; }
     .lv-contacto {
-      font-size:.9rem;color:#0d7490;font-weight:600;
-      margin-bottom:24px;
+      font-size:.82rem;color:#0d7490;font-weight:600;
+      margin-bottom:16px;
     }
     .lv-btn {
       display:inline-block;padding:12px 24px;
@@ -378,12 +408,12 @@ function inyectarEstilos() {
       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
     }
     .solicitud-box {
-      background:#fff;border-radius:16px;padding:36px 32px 28px;
-      width:100%;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.3);
-      text-align:center;margin:16px;
+      background:#fff;border-radius:16px;padding:22px 24px 18px;
+      width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.3);
+      text-align:center;margin:12px;max-height:92vh;overflow-y:auto;
     }
-    .solicitud-titulo { font-size:1.3rem;font-weight:800;color:#0d7490;margin-bottom:8px; }
-    .solicitud-desc { font-size:.88rem;color:#64748b;margin-bottom:20px;line-height:1.5; }
+    .solicitud-titulo { font-size:1.1rem;font-weight:800;color:#0d7490;margin-bottom:6px; }
+    .solicitud-desc { font-size:.82rem;color:#64748b;margin-bottom:14px;line-height:1.45; }
   `;
   document.head.appendChild(style);
 }
@@ -395,6 +425,15 @@ function mostrarLogin(mensajeError) {
   inyectarEstilos();
   document.body.style.overflow = "hidden";
 
+  // Remover el overlay de bloqueo inicial (spinner de carga)
+  const bloqInicial = document.getElementById('auth-bloq-inicial');
+  if (bloqInicial) bloqInicial.remove();
+
+  // Ocultar el contenido de la app para que no se vea detrás del login
+  const menuPrincipal = document.getElementById('menu-principal');
+  if (menuPrincipal) { menuPrincipal.style.display = 'none'; menuPrincipal.classList.add('oculto'); }
+  document.querySelectorAll('.pagina-cuestionario').forEach(function(p) { p.classList.remove('activa'); });
+
   let overlay = document.getElementById("login-overlay");
   if (!overlay) {
     overlay = document.createElement("div");
@@ -405,7 +444,7 @@ function mostrarLogin(mensajeError) {
         <div class="login-subtitle">Sistema de Preparación para el Examen IAR</div>
         <div class="login-tabs">
           <button class="login-tab activo" id="tab-login">Iniciar sesión</button>
-          <button class="login-tab" id="tab-registro">🆓 Probar gratis</button>
+          <button class="login-tab" id="tab-registro">📝 Iniciar registro</button>
         </div>
         <div id="login-error" class="login-error" style="display:none;"></div>
         <div id="login-success" class="login-success" style="display:none;"></div>
@@ -458,7 +497,7 @@ function mostrarLogin(mensajeError) {
               <button type="button" id="toggle-reg-password" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:0;color:#94a3b8;font-size:1.1rem;line-height:1;">👁</button>
             </div>
           </div>
-          <button id="reg-btn" class="login-btn" style="background:linear-gradient(135deg,#059669,#047857);">🚀 Crear cuenta DEMO gratis</button>
+          <button id="reg-btn" class="login-btn" style="background:linear-gradient(135deg,#059669,#047857);">📝 Registrar nueva cuenta</button>
           <div id="reg-loading" class="login-loading"></div>
         </div>
       </div>
@@ -615,7 +654,9 @@ async function handleRegistro() {
 
     // Proveer instancia de Firestore a script.js para sincronización de progreso
     if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
+    window._firebaseUID = user.uid;
 
+    _sesionIniciadaManualmente = true;
     ocultarLogin(true, user.uid);
     aplicarRestriccionesDemo();
     _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
@@ -636,6 +677,10 @@ async function handleRegistro() {
 }
 
 // ======== RESTRICCIONES DEMO ========
+// Referencias originales de funciones que demo puede parchear — se restauran al cerrar sesión
+let _origMostrarCuestionarioPreDemo = null;
+let _origMostrarRespuestasExamenPreDemo = null;
+
 function aplicarRestriccionesDemo() {
   window._demoCheckEnabled = true;
 
@@ -686,19 +731,23 @@ function aplicarRestriccionesDemo() {
 
   // ── Interceptar mostrarRespuestasExamen (cuestionario individual) ──
   const origRespExamen = window.mostrarRespuestasExamen;
-  if (origRespExamen) {
-    window.mostrarRespuestasExamen = function(seccionId) {
+  if (origRespExamen && !origRespExamen._esWrapperDemo) {
+    _origMostrarRespuestasExamenPreDemo = origRespExamen;
+    const wrapperResp = function(seccionId) {
       if (!DEMO_SECCIONES_PERMITIDAS.includes(seccionId)) {
         mostrarModalRestriccionDemo(); return;
       }
       origRespExamen(seccionId);
     };
+    wrapperResp._esWrapperDemo = true;
+    window.mostrarRespuestasExamen = wrapperResp;
   }
 
   // ── Interceptar simulacro ──
   const origSim = window.mostrarCuestionario;
-  if (origSim) {
-    window.mostrarCuestionario = function(seccionId) {
+  if (origSim && !origSim._esWrapperDemo) {
+    _origMostrarCuestionarioPreDemo = origSim;
+    const wrapperSim = function(seccionId) {
       if (seccionId === 'simulacro_iar' || seccionId === 'simulador') {
         mostrarModalRestriccionDemo(); return;
       }
@@ -707,6 +756,8 @@ function aplicarRestriccionesDemo() {
       }
       origSim(seccionId);
     };
+    wrapperSim._esWrapperDemo = true;
+    window.mostrarCuestionario = wrapperSim;
   }
 }
 
@@ -764,18 +815,18 @@ function mostrarModalRestriccionDemo() {
     'z-index:2147483647;display:flex;justify-content:center;align-items:center;' +
     'padding:16px;box-sizing:border-box;';
   overlay.innerHTML = `
-    <div style="background:#fff;border-radius:14px;padding:22px 20px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.4);text-align:center;max-height:90vh;overflow-y:auto;-webkit-user-select:auto;user-select:auto;">
-      <div class="demo-restriccion-icon" style="font-size:2rem;margin-bottom:6px;">🎓</div>
-      <div class="demo-restriccion-titulo" style="font-size:1rem;margin-bottom:6px;">Contenido exclusivo</div>
-      <div class="demo-restriccion-msg" style="font-size:.82rem;margin-bottom:12px;">
-        En la <strong>versión demo</strong> podés explorar libremente los exámenes de
-        <strong>SEP 2020</strong> y <strong>OCT 2020</strong>.<br><br>
-        Solicitá tu acceso completo para desbloquear todos los exámenes, el simulador y las respuestas. 🚀
+    <div style="background:#fff;border-radius:14px;padding:16px 16px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.4);text-align:center;max-height:92vh;overflow-y:auto;-webkit-user-select:auto;user-select:auto;">
+      <div class="demo-restriccion-icon" style="font-size:1.8rem;margin-bottom:4px;">🎓</div>
+      <div class="demo-restriccion-titulo" style="font-size:.95rem;margin-bottom:4px;">Contenido exclusivo</div>
+      <div class="demo-restriccion-msg" style="font-size:.8rem;margin-bottom:10px;">
+        En la <strong>versión de prueba</strong> podés explorar libremente los exámenes de
+        <strong>SEP 2020</strong> a <strong>DIC 2020</strong>.<br><br>
+        Solicitá tu acceso completo para desbloquear todos los Exámenes, el Simulador y las Explicaciones.
       </div>
 
       <!-- Selección de plan -->
-      <div style="background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:10px;padding:12px 14px;margin-bottom:12px;text-align:left;">
-        <div style="font-size:.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">📦 Elegí tu plan:</div>
+      <div style="background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:10px;padding:8px 10px;margin-bottom:10px;text-align:left;">
+        <div style="font-size:.7rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">📦 Elegí tu plan:</div>
         <div style="display:flex;gap:8px;" id="demo-planes-container">
           <div class="demo-plan-sel-card" data-plan="1 semana"
             onclick="window._seleccionarPlanDemo('1 semana')"
@@ -807,8 +858,8 @@ function mostrarModalRestriccionDemo() {
       </button>
 
       <!-- Email contacto -->
-      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;margin-bottom:10px;text-align:left;">
-        <div style="font-size:.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">✉️ Para más información escribinos a:</div>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;margin-bottom:8px;text-align:left;">
+        <div style="font-size:.7rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">✉️ Para más información escribinos a:</div>
         <span
           onclick="window._copiarEmailDemo()"
           title="Clic para copiar"
@@ -1056,6 +1107,10 @@ async function enviarSolicitud() {
 function mostrarLicenciaVencida(mensaje, esDemo, userData) {
   inyectarEstilos();
   document.body.style.overflow = "hidden";
+
+  // Remover el overlay de bloqueo inicial
+  const bloqInicial = document.getElementById('auth-bloq-inicial');
+  if (bloqInicial) bloqInicial.remove();
   const loginOverlay = document.getElementById("login-overlay");
   if (loginOverlay) loginOverlay.style.display = "none";
   if (document.getElementById("licencia-vencida-overlay")) return;
@@ -1077,15 +1132,15 @@ function mostrarLicenciaVencida(mensaje, esDemo, userData) {
       <div class="lv-contacto" style="text-align:left;">
         <div style="font-weight:700;color:#1e3a8a;margin-bottom:10px;">💰 Elegí un plan para renovar:</div>
         <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;" id="lv-planes-container">
-          <div class="lv-plan-card" data-plan="1 semana" onclick="window._seleccionarPlanLV('1 semana')" style="flex:1;min-width:120px;background:#eff6ff;border:2.5px solid #93c5fd;border-radius:10px;padding:12px;text-align:center;cursor:pointer;transition:all .15s;">
-            <div style="font-size:1.4rem;margin-bottom:4px;">⚡</div>
-            <div style="font-weight:800;font-size:1rem;color:#1e40af;">1 semana</div>
-            <div style="font-size:1.1rem;font-weight:700;color:#1e3a8a;margin-top:4px;">$10.000</div>
+          <div class="lv-plan-card" data-plan="1 semana" onclick="window._seleccionarPlanLV('1 semana')" style="flex:1;min-width:100px;background:#eff6ff;border:2.5px solid #93c5fd;border-radius:10px;padding:8px;text-align:center;cursor:pointer;transition:all .15s;">
+            <div style="font-size:1.1rem;margin-bottom:3px;">⚡</div>
+            <div style="font-weight:800;font-size:.88rem;color:#1e40af;">1 semana</div>
+            <div style="font-size:.95rem;font-weight:700;color:#1e3a8a;margin-top:3px;">$10.000</div>
           </div>
-          <div class="lv-plan-card" data-plan="1 mes" onclick="window._seleccionarPlanLV('1 mes')" style="flex:1;min-width:120px;background:#eff6ff;border:2.5px solid #3b82f6;border-radius:10px;padding:12px;text-align:center;cursor:pointer;transition:all .15s;">
-            <div style="font-size:1.4rem;margin-bottom:4px;">📅</div>
-            <div style="font-weight:800;font-size:1rem;color:#1e40af;">1 mes</div>
-            <div style="font-size:1.1rem;font-weight:700;color:#1e3a8a;margin-top:4px;">$30.000</div>
+          <div class="lv-plan-card" data-plan="1 mes" onclick="window._seleccionarPlanLV('1 mes')" style="flex:1;min-width:100px;background:#eff6ff;border:2.5px solid #3b82f6;border-radius:10px;padding:8px;text-align:center;cursor:pointer;transition:all .15s;">
+            <div style="font-size:1.1rem;margin-bottom:3px;">📅</div>
+            <div style="font-weight:800;font-size:.88rem;color:#1e40af;">1 mes</div>
+            <div style="font-size:.95rem;font-weight:700;color:#1e3a8a;margin-top:3px;">$30.000</div>
           </div>
         </div>
         <div id="lv-plan-seleccionado" style="display:none;background:#d1fae5;border:1px solid #6ee7b7;border-radius:8px;padding:8px 12px;font-size:.85rem;color:#065f46;font-weight:600;margin-bottom:10px;text-align:center;"></div>
@@ -1276,7 +1331,7 @@ async function handleLogin() {
         const userDataParaVencida = { email: user.email, uid: user.uid };
         mostrarLicenciaVencida(licencia.mensaje, licencia.esDemo, userDataParaVencida);
       } else {
-        sessionStorage.removeItem('iar_sesion_activa');
+        // (iar_sesion_activa ya no se usa);
         await signOut(auth);
         errDiv.textContent = licencia.mensaje;
         errDiv.style.display = "block";
@@ -1303,7 +1358,9 @@ async function handleLogin() {
 
     // Proveer instancia de Firestore a script.js para sincronización de progreso
     if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
+    window._firebaseUID = user.uid;
 
+    _sesionIniciadaManualmente = true;
     ocultarLogin(true, user.uid);
     if (licencia.esDemo) aplicarRestriccionesDemo();
     _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
@@ -1327,40 +1384,53 @@ function ocultarLogin(navegarAMenu = false, uid = null) {
   const overlay = document.getElementById("login-overlay");
   if (overlay) overlay.style.display = "none";
   document.body.style.overflow = "";
-  if (navegarAMenu) {
-    const hashActual = window.location.hash.replace('#', '');
-    const esHashVacio = !hashActual || hashActual === 'menu';
-    const esRecarga = sessionStorage.getItem('iar_sesion_activa') === '1';
 
-    if (esRecarga && !esHashVacio) {
-      // El usuario tenía una sesión activa con hash de cuestionario — solo limpiar paneles
+  // Remover el overlay de bloqueo inicial (spinner azul) si todavía está
+  const bloqInicial = document.getElementById('auth-bloq-inicial');
+  if (bloqInicial) bloqInicial.remove();
+
+  // Señal para script.js: Firebase confirmó la sesión, puede proceder con la navegación
+  window._firebaseSessionReady = true;
+  if (typeof window._onFirebaseSessionReady === 'function') {
+    window._onFirebaseSessionReady(navegarAMenu);
+  }
+
+  if (navegarAMenu) {
+    // Login manual → siempre ir al menú principal
+    const fnIrAlMenu = function() {
+      history.replaceState({ section: null }, 'Menú Principal', '#menu');
       setTimeout(function() {
+        // Ocultar todo lo que pueda estar visible de una sesión anterior
+        const buscador = document.getElementById('buscador-preguntas');
+        if (buscador) buscador.classList.add('oculto');
+        const buscadorInput = document.getElementById('buscador-input');
+        if (buscadorInput) buscadorInput.value = '';
+        const buscadorResultados = document.getElementById('buscador-resultados');
+        if (buscadorResultados) buscadorResultados.innerHTML = '';
+        const buscadorStats = document.getElementById('buscador-stats');
+        if (buscadorStats) buscadorStats.style.display = 'none';
+        const btnVolverBuscador = document.getElementById('btn-volver-buscador');
+        if (btnVolverBuscador) btnVolverBuscador.style.display = 'none';
+        try { sessionStorage.removeItem('buscador_origen'); } catch(e) {}
+        try { localStorage.removeItem('buscador_ultimo_query_v1'); } catch(e) {}
+        document.querySelectorAll(".pagina-cuestionario").forEach(function(p) {
+          p.classList.remove("activa");
+        });
+        document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(function(s) {
+          s.style.display = "none";
+        });
         const modPanel = document.getElementById("modificar-respuestas-panel");
         if (modPanel) modPanel.style.display = "none";
+        // Mostrar menú principal
+        const menuPrincipal = document.getElementById("menu-principal");
+        if (menuPrincipal) {
+          menuPrincipal.classList.remove("oculto");
+          menuPrincipal.style.display = "";
+        }
+        if (typeof window.chatMostrarEnMenu === 'function') window.chatMostrarEnMenu(true);
       }, 150);
-    } else {
-      // Login nuevo (o re-login desde menú): mostrar bienvenida si corresponde, luego ir al menú
-      sessionStorage.setItem('iar_sesion_activa', '1');
-      const fnIrAlMenu = function() {
-        window.location.hash = "menu";
-        setTimeout(function() {
-          const menuPrincipal = document.getElementById("menu-principal");
-          if (menuPrincipal) {
-            menuPrincipal.classList.remove("oculto");
-            menuPrincipal.style.display = "";
-          }
-          document.querySelectorAll(".pagina-cuestionario").forEach(function(p) {
-            p.classList.remove("activa");
-          });
-          document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(function(s) {
-            s.style.display = "none";
-          });
-          const modPanel = document.getElementById("modificar-respuestas-panel");
-          if (modPanel) modPanel.style.display = "none";
-        }, 150);
-      };
-      mostrarBienvenidaSiCorresponde(uid, fnIrAlMenu);
-    }
+    };
+    mostrarBienvenidaSiCorresponde(uid, fnIrAlMenu);
   }
 }
 
@@ -1401,11 +1471,15 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
         position: fixed; inset: 0; z-index: 9999;
         background: linear-gradient(150deg, #0f1e3c 0%, #1a3665 40%, #1e4080 70%, #163060 100%);
         display: flex; align-items: center; justify-content: center;
-        padding: 20px;
-        animation: bv-fadein 0.5s ease;
+        /* padding vertical generoso: deja aire arriba/abajo y evita que el card
+           toque los bordes en pantallas pequeñas */
+        padding: 16px;
+        box-sizing: border-box;
+        /* El overlay mismo scrollea si el contenido es más alto que la ventana */
+        overflow-y: auto;
       }
       @keyframes bv-fadein { from { opacity: 0; } to { opacity: 1; } }
-      @keyframes bv-slideup { from { opacity: 0; transform: translateY(32px); } to { opacity: 1; transform: translateY(0); } }
+      @keyframes bv-slideup { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: translateY(0); } }
 
       #bienvenida-card {
         background: rgba(255,255,255,0.04);
@@ -1413,39 +1487,42 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
         -webkit-backdrop-filter: blur(18px);
         border: 1px solid rgba(255,255,255,0.12);
         border-radius: 18px;
-        max-width: 580px; width: 100%;
-        padding: 28px 32px 22px;
+        /* ancho máximo cómodo para escritorio; en mobile ocupa todo el ancho disponible */
+        max-width: 600px; width: 100%;
+        /* padding equilibrado para escritorio */
+        padding: 36px 40px 28px;
         box-shadow: 0 32px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06) inset;
         animation: bv-slideup 0.55s cubic-bezier(0.22,1,0.36,1) 0.1s both;
-        position: relative; overflow: hidden;
-        max-height: 95vh; overflow-y: auto;
+        position: relative;
+        /* sin overflow-y: el overlay padre ya scrollea si hace falta */
+        box-sizing: border-box;
       }
       #bienvenida-card::before {
         content: '';
         position: absolute; top: -60px; right: -60px;
-        width: 220px; height: 220px;
+        width: 200px; height: 200px;
         background: radial-gradient(circle, rgba(37,99,235,0.25) 0%, transparent 70%);
-        pointer-events: none;
+        pointer-events: none; overflow: hidden;
       }
       #bienvenida-card::after {
         content: '';
         position: absolute; bottom: -40px; left: -40px;
-        width: 160px; height: 160px;
+        width: 150px; height: 150px;
         background: radial-gradient(circle, rgba(6,182,212,0.15) 0%, transparent 70%);
         pointer-events: none;
       }
 
       .bv-deco-line {
-        width: 52px; height: 3px;
+        width: 48px; height: 3px;
         background: linear-gradient(90deg, #3b82f6, #06b6d4);
-        border-radius: 2px; margin: 0 auto 14px;
+        border-radius: 2px; margin: 0 auto 16px;
       }
       .bv-logo-badge {
         display: inline-flex; align-items: center; gap: 10px;
         background: rgba(37,99,235,0.18);
         border: 1px solid rgba(59,130,246,0.35);
-        border-radius: 50px; padding: 5px 14px;
-        margin-bottom: 14px;
+        border-radius: 50px; padding: 5px 16px;
+        margin-bottom: 16px;
       }
       .bv-logo-text {
         font-family: 'Lato', sans-serif;
@@ -1457,21 +1534,21 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
 
       .bv-title {
         font-family: 'Playfair Display', Georgia, serif;
-        font-size: 1.55rem; font-weight: 700;
+        font-size: 1.65rem; font-weight: 700;
         color: #f0f6ff;
         text-align: center;
         line-height: 1.25;
-        margin-bottom: 18px;
+        margin-bottom: 20px;
         letter-spacing: 0.01em;
       }
 
       .bv-body {
         font-family: 'Lato', sans-serif;
-        font-size: 0.88rem; line-height: 1.65;
+        font-size: 0.93rem; line-height: 1.72;
         color: rgba(220,235,255,0.88);
         text-align: left;
       }
-      .bv-body p { margin-bottom: 12px; }
+      .bv-body p { margin-bottom: 14px; }
       .bv-body p:last-child { margin-bottom: 0; }
 
       .bv-highlight {
@@ -1480,30 +1557,30 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
       }
 
       .bv-divider {
-        height: 1px; margin: 18px 0;
+        height: 1px; margin: 20px 0;
         background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
       }
 
       .bv-closing {
         font-family: 'Playfair Display', Georgia, serif;
-        font-size: 0.92rem; font-style: italic;
+        font-size: 0.95rem; font-style: italic;
         color: #bfdbfe;
         text-align: center; margin-bottom: 4px;
       }
       .bv-wishes {
         font-family: 'Lato', sans-serif;
-        font-size: 0.78rem; color: rgba(147,197,253,0.7);
+        font-size: 0.8rem; color: rgba(147,197,253,0.7);
         text-align: center;
         letter-spacing: 0.04em;
       }
 
       #bv-btn-aceptar {
-        display: block; width: 100%; margin-top: 20px;
-        padding: 12px 24px;
+        display: block; width: 100%; margin-top: 22px;
+        padding: 13px 24px;
         background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 50%, #1e40af 100%);
         color: #fff; border: none; border-radius: 10px;
         font-family: 'Lato', sans-serif;
-        font-size: 0.92rem; font-weight: 700;
+        font-size: 0.95rem; font-weight: 700;
         letter-spacing: 1.2px; text-transform: uppercase;
         cursor: pointer;
         box-shadow: 0 6px 24px rgba(37,99,235,0.45);
@@ -1522,7 +1599,7 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
 
       .bv-no-mostrar {
         display: flex; align-items: center; gap: 10px;
-        justify-content: center; margin-top: 12px;
+        justify-content: center; margin-top: 14px;
         cursor: pointer; user-select: none;
       }
       .bv-no-mostrar input[type="checkbox"] { display: none; }
@@ -1549,17 +1626,33 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
       }
       .bv-no-mostrar:hover .bv-no-mostrar-label { color: #93c5fd; }
 
+      /* ── Mobile: reducir padding y tamaños de fuente ── */
       @media (max-width: 600px) {
-        #bienvenida-card { padding: 20px 18px 18px; }
-        .bv-title { font-size: 1.25rem; }
-        .bv-body { font-size: 0.82rem; line-height: 1.55; }
+        #bienvenida-overlay { padding: 12px; align-items: flex-start; padding-top: 20px; }
+        #bienvenida-card { padding: 24px 18px 20px; border-radius: 14px; }
+        .bv-title { font-size: 1.25rem; margin-bottom: 14px; }
+        .bv-body { font-size: 0.84rem; line-height: 1.6; }
         .bv-body p { margin-bottom: 10px; }
-        .bv-closing { font-size: 0.82rem; }
-        #bv-btn-aceptar { padding: 11px 16px; font-size: 0.85rem; margin-top: 16px; }
+        .bv-closing { font-size: 0.84rem; }
+        .bv-divider { margin: 14px 0; }
+        #bv-btn-aceptar { padding: 12px; font-size: 0.88rem; margin-top: 16px; }
+      }
+
+      /* ── Pantallas muy bajas (landscape mobile) ── */
+      @media (max-height: 600px) {
+        #bienvenida-overlay { align-items: flex-start; padding-top: 12px; }
+        #bienvenida-card { padding: 20px 20px 16px; }
+        .bv-title { font-size: 1.2rem; margin-bottom: 12px; }
+        .bv-divider { margin: 12px 0; }
+        #bv-btn-aceptar { margin-top: 14px; padding: 11px; }
       }
     `;
     document.head.appendChild(st);
   }
+
+  // Remover el overlay de bloqueo inicial si todavía está
+  const bloqInicial = document.getElementById('auth-bloq-inicial');
+  if (bloqInicial) bloqInicial.remove();
 
   // Eliminar overlay anterior si existe (re-login sin recargar página)
   const overlayViejo = document.getElementById("bienvenida-overlay");
@@ -1703,8 +1796,8 @@ function mostrarBarraSesion(email, licencia) {
     btnAdmin.style.position = "relative";
     btnAdmin.addEventListener("click", mostrarPanelAdmin);
     der.appendChild(btnAdmin);
-    // Iniciar listener en tiempo real de solicitudes pendientes
-    iniciarListenerSolicitudes();
+    // Iniciar listener DESPUÉS de que la barra esté en el DOM
+    // (si se llama antes, el onSnapshot no encuentra btn-abrir-admin)
   }
 
   const btnLogout = document.createElement("button");
@@ -1716,9 +1809,8 @@ function mostrarBarraSesion(email, licencia) {
   barra.appendChild(izq);
   barra.appendChild(der);
   document.body.appendChild(barra);
-
-  // Padding para que el contenido no quede tapado por la barra
   document.body.style.paddingBottom = "46px";
+  if (email === ADMIN_EMAIL) iniciarListenerSolicitudes();
 }
 
 // ======== LISTENER TIEMPO REAL SOLICITUDES ========
@@ -2269,13 +2361,14 @@ window.reactivarUsuario = async function(uid) {
   const planNombres = { "1semana":"1 semana","1mes":"1 mes","1min":"1 min (TEST)" };
   const venc = calcularVencimiento(plan);
   const ahora = new Date();
-  const licData = { porVida: false, plan: planNombres[plan], vencimiento: venc, aprobadoEn: ahora };
+  const licData = { porVida: false, esDemo: false, plan: planNombres[plan], vencimiento: venc, aprobadoEn: ahora };
   try {
     const snap = await getDoc(doc(db, "licencias", uid));
     let emailUsuario = null;
-    if (snap.exists() && snap.data().email) {
-      emailUsuario = snap.data().email;
-      licData.email = emailUsuario;
+    if (snap.exists()) {
+      const prev = snap.data();
+      if (prev.email)  { emailUsuario = prev.email;   licData.email  = prev.email; }
+      if (prev.nombre) { licData.nombre = prev.nombre; }
     }
     await setDoc(doc(db, "licencias", uid), licData);
 
@@ -2500,7 +2593,7 @@ async function handleLogout() {
 
     const user = auth.currentUser;
     if (user) await deleteDoc(doc(db, "sessions", user.uid));
-    sessionStorage.removeItem('iar_sesion_activa');
+    // (iar_sesion_activa ya no se usa);
 
     // Limpiar timer y datos del simulacro IAR al cerrar sesión
     _limpiarTimerSimulacroIAR();
@@ -2821,12 +2914,50 @@ function limpiarUI() {
   window._firestoreDB_comentarios = null;
   window._authCurrentUser = null;
   licenciaActual = null;
+
+  // ── Restaurar funciones parcheadas por el modo demo ──
+  // Sin esto, el próximo usuario (cuenta paga) hereda los wrappers de bloqueo.
+  if (_origMostrarCuestionarioPreDemo) {
+    window.mostrarCuestionario = _origMostrarCuestionarioPreDemo;
+    _origMostrarCuestionarioPreDemo = null;
+  }
+  if (_origMostrarRespuestasExamenPreDemo) {
+    window.mostrarRespuestasExamen = _origMostrarRespuestasExamenPreDemo;
+    _origMostrarRespuestasExamenPreDemo = null;
+  }
+
+  // ── Restaurar visualmente los ítems del menú bloqueados por demo ──
+  document.querySelectorAll('li').forEach(li => {
+    if (li.style.opacity === '0.4' || li.style.opacity === '0.55') {
+      li.style.opacity = '';
+      li.style.pointerEvents = '';
+      li.title = '';
+    }
+    // Quitar candados de respuestas correctas
+    const lock = li.querySelector('.demo-lock-icon');
+    if (lock) lock.remove();
+  });
+  // CRÍTICO: recrear la Promise de licencia para el próximo login.
+  // Una Promise solo se resuelve una vez — si no se recrea, el segundo usuario
+  // (ej: pago después de demo) hereda el resultado del anterior (esDemo:true).
+  window._licenciaYaVerificada = false;
+  window._licenciaVerificada = new Promise(function(resolve) {
+    _resolveLicenciaVerificada = resolve;
+  });
   detenerListenersActividad();
   detenerListenerSolicitudes();
   if (auth.currentUser) detenerPresencia(auth.currentUser.uid);
   detenerChat();
   // Desconectar sincronización de Firestore en script.js
   if (window._setFirestoreSync) window._setFirestoreSync(null, null);
+  // Limpiar UID de Firebase y caché de completados para que no se mezclen con el próximo usuario
+  window._firebaseUID = null;
+  try {
+    var _cpPrefix = 'iar_completed_v1_fs_';
+    Object.keys(localStorage).forEach(function(k) {
+      if (k.startsWith(_cpPrefix)) localStorage.removeItem(k);
+    });
+  } catch(_e) {}
   // Resetear autorización de "Modificar Respuestas" al cerrar sesión
   _modificarAutorizado = false;
   _seccionEditorActual = null;
@@ -2841,6 +2972,25 @@ function limpiarUI() {
     const el = document.getElementById(id);
     if (el) el.remove();
   });
+
+  // Limpiar completamente el estado visual de la app para que el próximo login
+  // empiece desde cero: ocultar buscador, cuestionarios, submenús y limpiar búsqueda.
+  const buscador = document.getElementById('buscador-preguntas');
+  if (buscador) buscador.classList.add('oculto');
+  const buscadorInput = document.getElementById('buscador-input');
+  if (buscadorInput) buscadorInput.value = '';
+  const buscadorResultados = document.getElementById('buscador-resultados');
+  if (buscadorResultados) buscadorResultados.innerHTML = '';
+  const buscadorStats = document.getElementById('buscador-stats');
+  if (buscadorStats) buscadorStats.style.display = 'none';
+  const btnVolverBuscador = document.getElementById('btn-volver-buscador');
+  if (btnVolverBuscador) btnVolverBuscador.style.display = 'none';
+  try { sessionStorage.removeItem('buscador_origen'); } catch(e) {}
+  try { localStorage.removeItem('buscador_ultimo_query_v1'); } catch(e) {}
+  document.querySelectorAll('.pagina-cuestionario').forEach(p => p.classList.remove('activa'));
+  document.querySelectorAll('.menu-principal[id$="-submenu"]').forEach(s => { s.style.display = 'none'; });
+  const menuPrincipalEl = document.getElementById('menu-principal');
+  if (menuPrincipalEl) { menuPrincipalEl.classList.add('oculto'); menuPrincipalEl.style.display = ''; }
 }
 
 // ======== CACHÉ Y CARGA DE PREGUNTAS DESDE FIRESTORE ========
@@ -2891,6 +3041,20 @@ async function registrarVisitaUnica(uid, esDemo) {
 
 onAuthStateChanged(auth, async (user) => {
   if (user) {
+    // ── PROTECCIÓN CONTRA RECARGA (F5 / Ctrl+R / Ctrl+F5) ──────────────────
+    // _sesionIniciadaManualmente es false al cargar la página (variable en memoria).
+    // Solo se vuelve true cuando el usuario presiona "INGRESAR AL SISTEMA" o
+    // "Crear cuenta DEMO gratis". Si es false, significa que la sesión de Firebase
+    // persistió de una visita anterior pero el usuario NO presionó el botón en
+    // esta carga de página → mostrar el login para que lo haga explícitamente.
+    if (!_sesionIniciadaManualmente) {
+      // Recarga de página (F5): la sesión Firebase persistió pero no hubo login manual.
+      // NO mostrar login — verificar la sesión en Firestore y restaurar la página en curso.
+      // La navegación la maneja script.js usando el hash actual de la URL.
+      // (continúa con el resto del onAuthStateChanged)
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const deviceId = getDeviceId();
     try {
       const licencia = await verificarLicencia(user.uid);
@@ -2903,7 +3067,6 @@ onAuthStateChanged(auth, async (user) => {
           // la solicitud de renovación. El signOut ocurre al presionar "Cerrar sesión".
           mostrarLicenciaVencida(licencia.mensaje, licencia.esDemo);
         } else {
-          sessionStorage.removeItem('iar_sesion_activa');
           _limpiarTimerSimulacroIAR();
           await signOut(auth);
           const msgCompleto = `No tenés una licencia activa para ${emailUsuario}.\n\nEscribinos a ${CONTACTO_EMAIL} con tu email y te activamos el acceso.`;
@@ -2917,7 +3080,8 @@ onAuthStateChanged(auth, async (user) => {
       if (snap.exists() && snap.data().deviceId === deviceId) {
         // Proveer instancia de Firestore a script.js
         if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
-        ocultarLogin(true, user.uid);
+        window._firebaseUID = user.uid;
+        ocultarLogin(_sesionIniciadaManualmente, user.uid);
         if (licencia.esDemo) aplicarRestriccionesDemo();
         _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
         mostrarBarraSesion(user.email, licencia);
@@ -2939,7 +3103,8 @@ onAuthStateChanged(auth, async (user) => {
           await setDoc(sessionRef, { deviceId, email: user.email, loginAt: serverTimestamp(), lastActivity: serverTimestamp() });
           // Proveer instancia de Firestore a script.js
           if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
-          ocultarLogin(true, user.uid);
+          window._firebaseUID = user.uid;
+          ocultarLogin(_sesionIniciadaManualmente, user.uid);
           if (licencia.esDemo) aplicarRestriccionesDemo();
           _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
           mostrarBarraSesion(user.email, licencia);
@@ -2951,7 +3116,6 @@ onAuthStateChanged(auth, async (user) => {
           // Sincronizar progreso desde Firestore (puede venir de otro dispositivo)
           if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
         } else {
-          sessionStorage.removeItem('iar_sesion_activa');
           _limpiarTimerSimulacroIAR();
           await signOut(auth);
           mostrarLogin("⚠️ Ya hay una sesión activa en otro dispositivo.");
@@ -2960,7 +3124,8 @@ onAuthStateChanged(auth, async (user) => {
         await setDoc(sessionRef, { deviceId, email: user.email, loginAt: serverTimestamp(), lastActivity: serverTimestamp() });
         // Proveer instancia de Firestore a script.js
         if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
-        ocultarLogin(true, user.uid);
+        window._firebaseUID = user.uid;
+        ocultarLogin(_sesionIniciadaManualmente, user.uid);
         if (licencia.esDemo) aplicarRestriccionesDemo();
         mostrarBarraSesion(user.email, licencia);
         iniciarMonitoreoSesion(user);
@@ -2976,9 +3141,15 @@ onAuthStateChanged(auth, async (user) => {
       mostrarLogin("Error al verificar tu acceso. Intentá nuevamente.");
     }
   } else {
+    // No hay usuario autenticado → mostrar login
     if (monitoreoInterval) { clearInterval(monitoreoInterval); monitoreoInterval = null; }
     limpiarUI();
     mostrarLogin();
+    // Resolver la promesa para que script.js no quede colgado esperando
+    if (!window._licenciaYaVerificada) {
+      _resolveLicenciaVerificada({ esDemo: false });
+      window._licenciaYaVerificada = true;
+    }
   }
 });
 
@@ -2987,7 +3158,7 @@ onAuthStateChanged(auth, async (user) => {
 // ======================================================
 
 let _presenciaRef = null;
-let _chatEsUsuarioPago = true; // todos pueden usar el chat
+let _chatEsUsuarioPago = true; // se actualiza en iniciarChat() según el tipo de licencia
 let _chatNombreUsuario = '';
 let _chatUnsubscribe = null;
 let _ultimoTsLeido = Date.now();
@@ -3045,7 +3216,7 @@ function detenerPresencia(uid) {
 // ──────────────────────────────────────────────────────
 
 function iniciarChat(email, esDemo) {
-  _chatEsUsuarioPago = true; // pago y demo pueden chatear
+  _chatEsUsuarioPago = !esDemo; // solo usuarios de pago pueden escribir
   _chatNombreUsuario = email.split('@')[0];
   _inyectarBotonChat();
 }
@@ -3093,6 +3264,29 @@ function _inyectarBotonChat() {
   // Ventana del chat
   const ventana = document.createElement('div');
   ventana.id = 'chat-ventana';
+  // Área de input: diferente según si el usuario es de pago o demo
+  const inputAreaHTML = _chatEsUsuarioPago
+    ? `<div id="chat-input-area">
+        <input id="chat-input" type="text" placeholder="Escribí tu mensaje..." maxlength="300" autocomplete="off" />
+        <button id="chat-enviar">➤</button>
+       </div>`
+    : `<div id="chat-input-area" id="chat-input-area-demo" style="
+        background:linear-gradient(135deg,#1e3a8a 0%,#1a56a0 100%);
+        padding:10px 14px; display:flex; align-items:center; gap:10px;
+        border-top:1px solid rgba(255,255,255,0.08);">
+        <div style="
+          flex:1; display:flex; align-items:center; gap:9px;
+          background:rgba(255,255,255,0.07);
+          border:1px solid rgba(255,255,255,0.15);
+          border-radius:8px; padding:9px 13px;">
+          <span style="font-size:1rem; flex-shrink:0;">🔒</span>
+          <span style="font-size:.78rem; color:rgba(255,255,255,0.82); line-height:1.4; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+            <strong style="color:#93c5fd; font-size:.8rem;">Chat exclusivo para usuarios con acceso completo.</strong><br>
+            Adquirí tu plan para participar.
+          </span>
+        </div>
+       </div>`;
+
   ventana.innerHTML = `
     <div id="chat-header">
       <div style="display:flex;flex-direction:column;gap:2px;">
@@ -3102,18 +3296,18 @@ function _inyectarBotonChat() {
       <button id="chat-cerrar" title="Cerrar chat">✕</button>
     </div>
     <div id="chat-mensajes"></div>
-    <div id="chat-input-area">
-      <input id="chat-input" type="text" placeholder="Escribí tu mensaje..." maxlength="300" autocomplete="off" />
-      <button id="chat-enviar">➤</button>
-    </div>
+    ${inputAreaHTML}
   `;
   document.body.appendChild(ventana);
 
   document.getElementById('chat-cerrar').addEventListener('click', () => _toggleChat(false));
 
-  const input = document.getElementById('chat-input');
-  document.getElementById('chat-enviar').addEventListener('click', _enviarMensaje);
-  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _enviarMensaje(); } });
+  // Solo conectar eventos de envío si el usuario tiene acceso completo
+  if (_chatEsUsuarioPago) {
+    const input = document.getElementById('chat-input');
+    document.getElementById('chat-enviar').addEventListener('click', _enviarMensaje);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _enviarMensaje(); } });
+  }
 
   // Suscribir a mensajes en tiempo real (últimos 50 ordenados por timestamp)
   const mensajesRef = rtQuery(ref(rtdb, 'chat/mensajes'), orderByChild('ts'), limitToLast(200));
@@ -3243,6 +3437,8 @@ function _renderMensajes(msgs) {
 }
 
 async function _enviarMensaje() {
+  // Bloqueo de seguridad: usuarios demo no pueden enviar mensajes
+  if (!_chatEsUsuarioPago) return;
   const input = document.getElementById('chat-input');
   const btnEnviar = document.getElementById('chat-enviar');
   if (!input) return;
@@ -3348,7 +3544,7 @@ function _inyectarEstilosModificar() {
       display:flex;justify-content:center;align-items:center;
       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
     }
-    .mod-confirm-box { background:#fff;border-radius:14px;padding:28px 28px 22px;width:100%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,.3);text-align:center;margin:16px; }
+    .mod-confirm-box { background:#fff;border-radius:14px;padding:20px 20px 16px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.3);text-align:center;margin:12px;max-height:92vh;overflow-y:auto; }
     .mod-audit-log { font-size:.72rem;color:#94a3b8;margin-top:6px;font-style:italic; }
   `;
   document.head.appendChild(s);
