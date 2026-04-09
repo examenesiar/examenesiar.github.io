@@ -1,12 +1,8 @@
-/* ========== script.js ========== */
 
-// Variable global de preguntas — se llena desde Firestore (ya no viene de preguntasiar.js)
 if (typeof preguntasPorSeccion === 'undefined') {
   var preguntasPorSeccion = {};
 }
 
-// ======== URL BASE PARA IMÁGENES ========
-// En servidor local usa ruta relativa; en producción apunta a GitHub Pages.
 const IMAGENES_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.startsWith('192.168.'))
   ? ''
   : 'https://examenesiar.github.io/';
@@ -16,52 +12,40 @@ function getImagenUrl(path) {
   if (path.startsWith('http://') || path.startsWith('https://')) return path;
   return IMAGENES_BASE_URL + path;
 }
-/* Requisitos:
-   1) Orden de preguntas ALEATORIO al inicio; orden de opciones aleatorio por pregunta.
-      - Las preguntas se mezclan al inicio de cada intento
-      - Las preguntas respondidas quedan arriba
-      - Las preguntas sin responder se mantienen abajo en orden aleatorio
-   2) Progreso y selecciones persistentes en localStorage hasta completar el cuestionario.
-      se limpia el estado para permitir un nuevo intento.
-   5) Cada pregunta tiene botón "Responder"; pinta verde/rojo y marca "✅/❌".
-   6) Botón flotante "Ver mi progreso" con ventana flotante.
-   7) Mantener posición de scroll al regresar al menú principal.
-   8) Navegación con botones del navegador (atrás/adelante).
-*/
 
 (function () {
-  // ======== Claves de almacenamiento ========
-  const STORAGE_KEY = "quiz_state_v3";             // Estado persistente por sección (v3 para nueva funcionalidad)
-  const ATTEMPT_LOG_KEY = "quiz_attempt_log_v1";   // Historial de intentos
-  const SCROLL_POSITION_KEY = "quiz_scroll_position_v1"; // Posición del scroll
+  
+  const STORAGE_KEY = "quiz_state_v3";             
+  const ATTEMPT_LOG_KEY = "quiz_attempt_log_v1";   
+  const SCROLL_POSITION_KEY = "quiz_scroll_position_v1"; 
 
-  // ======== Estado en memoria (se sincroniza con localStorage Y Firestore) ========
-  // Estructura por sección:
-  // state[seccionId] = {
-  //   shuffleFrozen: false,
-  //   shuffleMap: { [qIndex]: { [mixedIndex]: originalIndex } },
-  //   questionOrder: [array de índices de preguntas mezclados],
-  //   answers: { [qIndex]: [mixedIndicesSeleccionados] },
-  //   graded: { [qIndex]: true|false },
-  //   totalShown: false,
-  //   explanationShown: { [qIndex]: true|false }  // si se mostró la explicación
-  // }
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
   let state = loadJSON(STORAGE_KEY, {});
   let attemptLog = loadJSON(ATTEMPT_LOG_KEY, []);
 
-  // ======== SINCRONIZACIÓN CON FIRESTORE ========
-  // Ruta: progreso/{uid}/secciones/{seccionId}  → estado del cuestionario
-  //        progreso/{uid}/historial              → { entries: [...] }
-  //        progreso/{uid}/completados            → { [seccionId]: true }
+  
+  
+  
+  
 
-  let _firestoreUID = null;     // UID del usuario autenticado
-  let _firestoreDB  = null;     // instancia de Firestore (se inyecta desde firebase-auth.js)
-  let _pendingFSSave = {};      // { [seccionId]: timeoutId } — debounce por sección
-  const FS_DEBOUNCE_MS = 1500;  // ms de espera antes de escribir en Firestore
+  let _firestoreUID = null;     
+  let _firestoreDB  = null;     
+  let _pendingFSSave = {};      
+  const FS_DEBOUNCE_MS = 1500;  
 
-  // firebase-auth.js inyecta estas referencias una vez que el usuario está autenticado
+  
   window._setFirestoreSync = function(uid, dbInstance) {
-    // Si se está cerrando sesión (uid=null), limpiar historial local de la sesión anterior
+    
     if (!uid) {
       attemptLog = [];
       localStorage.removeItem(ATTEMPT_LOG_KEY);
@@ -71,24 +55,24 @@ function getImagenUrl(path) {
     _firestoreDB  = dbInstance;
   };
 
-  // ---- Helpers de Firestore dinámica ----
+  
   async function _fsDoc(path) {
-    // path: array de strings, ej. ['progreso', uid, 'secciones', seccionId]
+    
     const { doc, getFirestore } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
     return doc(_firestoreDB, ...path);
   }
 
-  // ---- Guardar estado de UNA sección en Firestore (con debounce) ----
+  
   function _guardarSeccionFirestore(seccionId) {
     if (!_firestoreUID || !_firestoreDB) return;
-    // Cancelar el timeout anterior si existe
+    
     if (_pendingFSSave[seccionId]) clearTimeout(_pendingFSSave[seccionId]);
     _pendingFSSave[seccionId] = setTimeout(async () => {
       delete _pendingFSSave[seccionId];
       try {
         const { doc, setDoc, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-        // IMPORTANTE: leer SIEMPRE desde localStorage (fuente de verdad local)
-        // porque script_onebyone.js escribe ahí directamente sin actualizar state en memoria.
+        
+        
         const rawState = localStorage.getItem(STORAGE_KEY);
         const allState = rawState ? JSON.parse(rawState) : {};
         const secData = allState[seccionId];
@@ -102,17 +86,17 @@ function getImagenUrl(path) {
     }, FS_DEBOUNCE_MS);
   }
 
-  // ---- Versión inmediata (sin debounce) para uso desde script_onebyone.js ----
+  
   async function _guardarSeccionFirestoreInmediato(seccionId) {
     if (!_firestoreUID || !_firestoreDB) return;
-    // Cancelar debounce pendiente si existe
+    
     if (_pendingFSSave[seccionId]) {
       clearTimeout(_pendingFSSave[seccionId]);
       delete _pendingFSSave[seccionId];
     }
     try {
       const { doc, setDoc, serverTimestamp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
-      // Leer desde localStorage (fuente de verdad local)
+      
       const rawState = localStorage.getItem(STORAGE_KEY);
       const allState = rawState ? JSON.parse(rawState) : {};
       const secData = allState[seccionId];
@@ -125,16 +109,16 @@ function getImagenUrl(path) {
     }
   }
 
-  // Exponer globalmente para que script_onebyone.js pueda llamarlas
+  
   window._guardarSeccionFirestore = _guardarSeccionFirestore;
   window._guardarSeccionFirestoreInmediato = _guardarSeccionFirestoreInmediato;
 
-  // ---- Borrar el progreso de UNA sección en Firestore (al reiniciar) ----
-  // CRÍTICO: sin esto, al volver al cuestionario Firestore restaura el progreso viejo.
+  
+  
   async function _borrarSeccionFirestore(seccionId) {
     if (!_firestoreUID || !_firestoreDB) return;
-    // Cancelar TODOS los guardados pendientes (no solo el de esta sección)
-    // para evitar que un debounce en vuelo suba datos viejos después del delete
+    
+    
     Object.keys(_pendingFSSave).forEach(function(sid) {
       clearTimeout(_pendingFSSave[sid]);
       delete _pendingFSSave[sid];
@@ -150,7 +134,7 @@ function getImagenUrl(path) {
   }
   window._borrarSeccionFirestore = _borrarSeccionFirestore;
 
-  // ---- Guardar historial de intentos en Firestore ----
+  
   async function _guardarHistorialFirestore() {
     if (!_firestoreUID || !_firestoreDB) return;
     try {
@@ -163,7 +147,7 @@ function getImagenUrl(path) {
     }
   }
 
-  // ---- Guardar completados en Firestore ----
+  
   async function _guardarCompletadosFirestore(completados) {
     if (!_firestoreUID || !_firestoreDB) return;
     try {
@@ -175,14 +159,14 @@ function getImagenUrl(path) {
       console.warn('[IAR Sync] ⚠️ Error guardando completados en Firestore:', err.code || err.message);
     }
   }
-  // Exponer globalmente para que index.html (checkmarks del submenú IAR) pueda llamarla
+  
   window._guardarCompletadosFirestore = _guardarCompletadosFirestore;
 
-  // ---- Sincronizar TODO desde Firestore al iniciar sesión ----
-  // Se llama desde firebase-auth.js después de autenticar
+  
+  
   window._sincronizarProgresoDesdeFirestore = async function(uid) {
     if (!uid) return;
-    // Esperar a que _firestoreDB esté disponible (puede tardar un tick)
+    
     let intentos = 0;
     while (!_firestoreDB && intentos < 30) {
       await new Promise(r => setTimeout(r, 200));
@@ -193,11 +177,11 @@ function getImagenUrl(path) {
       return;
     }
     _firestoreUID = uid;
-    _sincronizandoDesdeFS = true; // suprimir re-escritura en Firestore durante la carga
+    _sincronizandoDesdeFS = true; 
 
-    // CRÍTICO: limpiar estado local ANTES de cargar desde Firestore.
-    // Sin esto, un usuario nuevo hereda el progreso (preguntas respondidas) y los
-    // checkmarks del usuario anterior que quedaron en localStorage del mismo dispositivo.
+    
+    
+    
     state = {};
     localStorage.removeItem(STORAGE_KEY);
     attemptLog = [];
@@ -207,16 +191,16 @@ function getImagenUrl(path) {
     try {
       const { doc, getDoc, collection, getDocs } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
 
-      // ─────────────────────────────────────────────────────────────────────────
-      // REGLA FUNDAMENTAL: Firestore es la fuente de verdad para TODO el progreso.
-      // Al iniciar sesión, el estado de Firestore REEMPLAZA al localStorage
-      // para cada sección que exista en Firestore.
-      // El localStorage es solo caché de sesión — nunca puede ganarle a Firestore.
-      // ─────────────────────────────────────────────────────────────────────────
+      
+      
+      
+      
+      
+      
 
-      // --- 1. Cargar estado de TODAS las secciones desde Firestore ---
-      // Firestore reemplaza incondicionalmente el estado local de cada sección.
-      // Si una sección no existe en Firestore, se conserva el estado local.
+      
+      
+      
       try {
         const seccionesCol = collection(_firestoreDB, 'progreso', uid, 'secciones');
         const secSnap = await getDocs(seccionesCol);
@@ -225,16 +209,16 @@ function getImagenUrl(path) {
         secSnap.forEach(docSnap => {
           const seccionId = docSnap.id;
           const data = docSnap.data();
-          delete data._ts; // quitar campo técnico interno
+          delete data._ts; 
 
-          // ── Simulacro IAR: NUNCA restaurar progreso incompleto desde Firestore ──
-          // El simulacro es efímero: si el usuario cerró sesión/recargó con progreso a medias,
-          // ese progreso se descarta. Solo se restaura si estaba completamente terminado (totalShown).
+          
+          
+          
           if (seccionId === 'simulacro_iar' && !data.totalShown) {
             console.log('[IAR Sync] ⏭️ simulacro_iar incompleto en Firestore — ignorado (se generará nuevo set)');
-            // También borrar de Firestore para no acumular datos obsoletos
+            
             _borrarSeccionFirestore('simulacro_iar');
-            return; // skip this section
+            return; 
           }
 
           const fsGradedCount = data.graded
@@ -244,14 +228,14 @@ function getImagenUrl(path) {
             const a = data.answers[k]; return Array.isArray(a) && a.length > 0;
           });
 
-          // Contar progreso local para logging
+          
           const localData = state[seccionId];
           const localGradedCount = localData && localData.graded
             ? Object.keys(localData.graded).filter(k => localData.graded[k]).length
             : 0;
 
           if (fsGradedCount > 0 || fsHayAnswers || data.totalShown) {
-            // Firestore tiene progreso real → reemplazar local incondicionalmente
+            
             state[seccionId] = data;
             seccionesActualizadas++;
             if (fsGradedCount !== localGradedCount) {
@@ -259,21 +243,21 @@ function getImagenUrl(path) {
                 '| FS:', fsGradedCount, 'resp | Local previo:', localGradedCount, 'resp');
             }
           } else if (localGradedCount > 0) {
-            // Firestore está vacío pero local tiene datos → subir local a Firestore
+            
             console.log('[IAR Sync] ⬆️ Subiendo progreso local a Firestore (FS vacío):', seccionId);
             _guardarSeccionFirestore(seccionId);
           }
         });
 
-        // Para secciones que están en local pero NO en Firestore:
-        // subir esos datos a Firestore (por si se respondieron sin conexión o antes de la sincronización)
+        
+        
         Object.keys(state).forEach(function(seccionId) {
-          // Nunca subir a Firestore el simulacro_iar si está incompleto
+          
           if (seccionId === 'simulacro_iar') {
             const s = state[seccionId];
-            if (!s || !s.totalShown) return; // skip
+            if (!s || !s.totalShown) return; 
           }
-          // Verificar si esta sección ya fue procesada desde Firestore
+          
           let yaEnFS = false;
           secSnap.forEach(docSnap => { if (docSnap.id === seccionId) yaEnFS = true; });
           if (!yaEnFS) {
@@ -289,32 +273,32 @@ function getImagenUrl(path) {
           }
         });
 
-        // Actualizar localStorage con el estado fusionado
+        
         saveJSON(STORAGE_KEY, state);
         console.log('[IAR Sync] ✅ Sincronización completada. Secciones actualizadas desde Firestore:', seccionesActualizadas);
       } catch(e) {
         console.warn('[IAR Sync] No se pudo cargar secciones desde Firestore:', e.code || e.message);
       }
 
-      // --- 2. Cargar historial (Firestore siempre es la fuente de verdad) ---
+      
       try {
         const histRef = doc(_firestoreDB, 'progreso', uid, 'datos', 'historial');
         const histSnap = await getDoc(histRef);
         if (histSnap.exists() && histSnap.data().entries) {
           const fsEntries = histSnap.data().entries;
-          // Firestore gana si tiene más entradas o igual cantidad
-          // Solo se conserva local si Firestore está vacío y local tiene datos
+          
+          
           if (fsEntries.length >= attemptLog.length) {
             attemptLog = fsEntries;
             saveJSON(ATTEMPT_LOG_KEY, attemptLog);
             console.log('[IAR Sync] ✅ Historial cargado desde Firestore:', fsEntries.length, 'entradas');
           } else if (attemptLog.length > 0) {
-            // Local tiene más entradas → subir a Firestore
+            
             console.log('[IAR Sync] ⬆️ Historial local tiene más entradas, subiendo a Firestore');
             _guardarHistorialFirestore();
           }
         } else if (attemptLog.length > 0) {
-          // Firestore no tiene historial pero local sí → subir
+          
           console.log('[IAR Sync] ⬆️ Subiendo historial local a Firestore (FS sin historial)');
           _guardarHistorialFirestore();
         }
@@ -322,25 +306,25 @@ function getImagenUrl(path) {
         console.warn('[IAR Sync] No se pudo cargar historial desde Firestore:', e.code || e.message);
       }
 
-      // --- 3. Cargar completados (Firestore es la ÚNICA fuente de verdad) ---
-      // CRÍTICO: NO fusionar con datos locales del dispositivo — pueden pertenecer a otro usuario.
-      // Se usa el UID de Firebase como clave de caché para aislar usuarios en el mismo dispositivo.
+      
+      
+      
       try {
         const compRef = doc(_firestoreDB, 'progreso', uid, 'datos', 'completados');
         const compSnap = await getDoc(compRef);
         const COMPLETED_KEY_FS = 'iar_completed_v1_fs_' + uid;
 
         if (compSnap.exists() && compSnap.data().completados) {
-          // Firestore tiene datos → sobrescribir caché local limpiamente (sin fusionar)
+          
           const fsCompleted = compSnap.data().completados;
           localStorage.setItem(COMPLETED_KEY_FS, JSON.stringify(fsCompleted));
           console.log('[IAR Sync] ✅ Completados cargados desde Firestore:', Object.keys(fsCompleted).length, 'ítems');
         } else {
-          // Usuario sin completados en Firestore → empezar vacío
+          
           localStorage.setItem(COMPLETED_KEY_FS, JSON.stringify({}));
           console.log('[IAR Sync] ℹ️ Sin completados en Firestore para este usuario — iniciando vacío');
         }
-        // Actualizar UI de checkmarks
+        
         if (typeof renderNavBar === 'function') renderNavBar();
         _actualizarCheckmarksMenu();
       } catch(e) {
@@ -350,11 +334,11 @@ function getImagenUrl(path) {
     } catch(err) {
       console.warn('[IAR Sync] Error general en sincronización desde Firestore:', err.code || err.message);
     } finally {
-      _sincronizandoDesdeFS = false; // restaurar flag sea cual sea el resultado
+      _sincronizandoDesdeFS = false; 
     }
   };
 
-  // ---- Actualizar checkmarks en el menú ----
+  
   function _actualizarCheckmarksMenu() {
     try {
       const uid = window._firebaseUID;
@@ -749,8 +733,6 @@ function getImagenUrl(path) {
     const _panelFloat = document.getElementById("panel-progreso");
     if (_panelFloat) _panelFloat.style.display = "none";
 
-
-
     // Simulacro IAR: al salir al menú SIEMPRE limpiar el progreso (no se guarda)
     // Excepción: si ya completó el cuestionario (totalShown), no limpiar para que vea el resultado
     if (currentSection === 'simulacro_iar') {
@@ -790,7 +772,6 @@ function getImagenUrl(path) {
       clearSectionStateIfCompletedAndBack(currentSection);
       
       if (state[currentSection] && !state[currentSection].totalShown) {
-
 
         // IMPORTANTE: leer progreso desde localStorage, no desde state en memoria,
         // porque script_onebyone.js escribe directamente en quiz_state_v3 sin actualizar state.
@@ -855,7 +836,6 @@ function getImagenUrl(path) {
     } catch(e) {}
   }
 
-
   // ======== Helper: leer si una sección tiene progreso en localStorage ========
   // IMPORTANTE: script_onebyone.js escribe en quiz_state_v3 directamente
   // sin actualizar el objeto `state` en memoria. Por eso hay que leer desde localStorage.
@@ -891,7 +871,6 @@ function _hayProgresoEnStorage(seccionId) {
       }
     } catch(e) {}
   }
-
 
   // ======== Helper: persistir índice OAV actual en localStorage al salir con progreso ========
   function _persistirIndiceOAVActual(seccionId) {
@@ -1185,7 +1164,6 @@ function _hayProgresoEnStorage(seccionId) {
     });
   }
 
-
   function getDisplayOrder(seccionId, preguntasLen) {
     const s = state[seccionId];
 
@@ -1253,7 +1231,6 @@ function _hayProgresoEnStorage(seccionId) {
       const h3 = document.createElement("h3");
       h3.textContent = `${displayPosition + 1}. ${preg.pregunta}`;
       div.appendChild(h3);
-
 
 // ========== CÓDIGO NUEVO - AGREGAR DESPUÉS DEL h3 ==========
       // Mostrar imagen si existe
@@ -1402,7 +1379,6 @@ function _hayProgresoEnStorage(seccionId) {
         window._oavState[seccionId] = { currentIdx: 0, total: preguntas.length };
       }
       window._oavRenderOAV(seccionId);
-
 
     }
     // ────────────────────────────────────────────────────────────────────
@@ -1587,7 +1563,7 @@ function _hayProgresoEnStorage(seccionId) {
                 var icon = li.querySelector('.iar-check-icon');
                 if (icon) icon.title = 'Completado — clic para desmarcar';
               }
-              // Actualizar también los botones de la barra inferior
+              
               document.querySelectorAll('.nav-bar-btn[data-seccion="' + sid + '"]').forEach(function(btn) {
                 btn.classList.add('nav-bar-btn-completado');
               });
@@ -1596,14 +1572,13 @@ function _hayProgresoEnStorage(seccionId) {
         }
       } catch(e) {}
     })(seccionId);
-    // ======= FIN AUTO-CHECKMARK =======
+    
 
-// Guardia anti-duplicado por tiempo: no registrar si ya existe una entrada
-    // para esta misma sección hace menos de 3 minutos.
-    // Cubre el caso de recargar la página al terminar sin penalizar intentos reales
-    // (un usuario tarda mínimo 5-20 min en resolver un cuestionario).
+    
+    
+    
     var ahoraMs = Date.now();
-    var VENTANA_MS = 3 * 60 * 1000; // 3 minutos en milisegundos
+    var VENTANA_MS = 3 * 60 * 1000; 
     var yaRegistrado = attemptLog.some(function(entry) {
       if (entry.sectionId !== seccionId) return false;
       var entryMs = entry.iso ? new Date(entry.iso).getTime() : 0;
@@ -1618,19 +1593,18 @@ function _hayProgresoEnStorage(seccionId) {
         total: preguntas.length
       });
       saveJSON(ATTEMPT_LOG_KEY, attemptLog);
-      // Guardar historial en Firestore
+      
       _guardarHistorialFirestore();
     }
 
-    // Actualizar colores de la barra de navegación inferior
+    
     if (typeof renderNavBar === 'function') renderNavBar();
   }
-  // Exponer en window para que script_onebyone.js (OAV) pueda disparar
-  // el registro del intento (attemptLog + Firestore) al mostrar el resultado.
+  
+  
   window.mostrarResultadoFinal = mostrarResultadoFinal;
 
-
-  // ======== Reiniciar Examen ========
+  
   window.reiniciarExamen = function(seccionId) {
     const s = state[seccionId];
     const esIAR = seccionId.startsWith('iar') && seccionId !== 'simulacro_iar';
@@ -1644,20 +1618,20 @@ function _hayProgresoEnStorage(seccionId) {
       titulo,
       mensaje,
       function() {
-        // Ejecutar callback pendiente de OAV (limpia marcas/índice) si existe
+        
         if (typeof window._oavPendingReiniciarCallback === 'function') {
           window._oavPendingReiniciarCallback();
           window._oavPendingReiniciarCallback = null;
         }
-        // Siempre aleatorizar opciones al reiniciar (aleatorizar=true)
-        // Para IAR conservamos el orden de PREGUNTAS pero aleatorizamos las OPCIONES
+        
+        
         if (esIAR) {
-          // Borrar solo shuffleMap para aleatorizar opciones, pero mantener estructura IAR
+          
           const answeredOrderGuardado = s && s.answeredOrder ? s.answeredOrder.slice() : [];
           const unansweredOrderGuardado = s && s.unansweredOrder ? s.unansweredOrder.slice() : [];
           state[seccionId] = {
             shuffleFrozen: false,
-            shuffleMap: {},          // vacío = se re-mezclará al regenerar
+            shuffleMap: {},          
             answeredOrder: [],
             unansweredOrder: [...answeredOrderGuardado, ...unansweredOrderGuardado],
             answers: {},
@@ -1666,7 +1640,7 @@ function _hayProgresoEnStorage(seccionId) {
             explanationShown: {}
           };
           saveJSON(STORAGE_KEY, state);
-          // Borrar en Firestore para evitar que se restaure el progreso viejo al volver
+          
           _borrarSeccionFirestore(seccionId);
           if (window.puntajesPorSeccion && window.puntajesPorSeccion[seccionId]) {
             window.puntajesPorSeccion[seccionId] = Array(
@@ -1676,8 +1650,8 @@ function _hayProgresoEnStorage(seccionId) {
           const resultadoTotal = document.getElementById(`resultado-total-${seccionId}`);
           if (resultadoTotal) { resultadoTotal.innerHTML = ""; resultadoTotal.className = "resultado-final"; }
         } else {
-          // Para no-IAR: limpiar todo y aleatorizar todo (preguntas + opciones)
-          // limpiarSeccion ya llama a _borrarSeccionFirestore internamente
+          
+          
           limpiarSeccion(seccionId, true);
         }
 
@@ -1685,7 +1659,7 @@ function _hayProgresoEnStorage(seccionId) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       },
       function() {
-        // Si cancela, limpiar el callback pendiente de OAV para no dejarlo colgado
+        
         window._oavPendingReiniciarCallback = null;
       },
       { labelAceptar: '🔄 REINICIAR', labelCancelar: 'CANCELAR', colorAceptar: '#d97706' }
@@ -1698,10 +1672,10 @@ function _hayProgresoEnStorage(seccionId) {
     return inputs.some(inp => inp.checked);
   }
 
-  // ======== Exponer showSection globalmente para el buscador ========
+  
   window.showSection = showSection;
 
-  // ======== Navegación carrusel entre cuestionarios IAR ========
+  
   const IAR_CARRUSEL = [
     'iarsep2020','iaroct2020','iarnov2020','iardic2020',
     'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
@@ -1712,22 +1686,22 @@ function _hayProgresoEnStorage(seccionId) {
     'iarfeb2026'
   ];
 
-  // ── Helper: detectar si hay respuestas marcadas en la sección actual ──
-  // Lee siempre desde localStorage para capturar lo escrito por script_onebyone.js
+  
+  
   function hayRespuestasMarcadas(seccionId) {
     if (!seccionId) return false;
-    // Sincronizar state en memoria antes de evaluar
+    
     _sincronizarStateDesdeStorage(seccionId);
     return _hayProgresoEnStorage(seccionId);
   }
 
-  // ── Diálogo de confirmación profesional para salir de un cuestionario en curso ──
+  
   function confirmarSalidaCuestionario(onConfirmar) {
     if (!hayRespuestasMarcadas(currentSection)) {
       onConfirmar();
       return;
     }
-    // Mensaje especial para Simulacro IAR: advertir que el progreso se pierde
+    
     if (currentSection === 'simulacro_iar') {
       var simState = null;
       try { var _raw = localStorage.getItem('quiz_state_v3'); if (_raw) simState = JSON.parse(_raw)['simulacro_iar']; } catch(e) {}
@@ -1757,7 +1731,7 @@ function _hayProgresoEnStorage(seccionId) {
     if (idx === -1) return;
     var nuevoIdx = (idx + direccion + IAR_CARRUSEL.length) % IAR_CARRUSEL.length;
     var destino = IAR_CARRUSEL[nuevoIdx];
-    // Bloqueo demo: si el destino no está permitido, mostrar modal
+    
     if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
         !window._demoSeccionesPermitidas.includes(destino)) {
       if (window.mostrarModalRestriccionDemo) window.mostrarModalRestriccionDemo();
@@ -1770,10 +1744,10 @@ function _hayProgresoEnStorage(seccionId) {
     });
   };
 
-  // ── Carrusel para Ver Respuestas Correctas ──
+  
   let _respuestasSeccionActual = '';
   window.navegarRespuestasIAR = function(seccionActual, direccion) {
-    // Intentar obtener la sección actual de múltiples fuentes
+    
     var sid = seccionActual
       || _respuestasSeccionActual
       || (document.getElementById('contenido-respuestas-examen') && document.getElementById('contenido-respuestas-examen').dataset.seccion)
@@ -1784,7 +1758,7 @@ function _hayProgresoEnStorage(seccionId) {
     }
     var nuevoIdx = (idx + direccion + IAR_CARRUSEL.length) % IAR_CARRUSEL.length;
     var destino = IAR_CARRUSEL[nuevoIdx];
-    // ── BLOQUEO DEMO ──
+    
     if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
         !window._demoSeccionesPermitidas.includes(destino)) {
       if (window.mostrarModalRestriccionDemo) window.mostrarModalRestriccionDemo();
@@ -1795,50 +1769,50 @@ function _hayProgresoEnStorage(seccionId) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Variable para rastrear el origen de navegación hacia un cuestionario
-  let navegacionOrigen = null; // 'buscador' | 'submenu' | null
+  
+  let navegacionOrigen = null; 
 
-  // ======== Navegación (mostrar/ocultar páginas) ========
+  
   window.mostrarCuestionario = function (seccionId) {
-    // Cuando se llama desde el menú/submenú, el origen es 'submenu'
+    
     navegacionOrigen = 'submenu';
     saveScrollPosition();
-    saveLastSection(seccionId);  // Guardar para volver al ítem correcto al regresar
+    saveLastSection(seccionId);  
     history.pushState({ section: seccionId, origen: 'submenu' }, `Cuestionario ${seccionId}`, `#${seccionId}`);
     showSection(seccionId);
   };
 
   window.mostrarSubmenu = function (submenuId) {
     saveScrollPosition();
-    saveLastSection(submenuId);  // Al volver al menú principal, resaltar el ítem del submenú
-    // Ocultar botón flotante de progreso en submenús
+    saveLastSection(submenuId);  
+    
     const _btnF = document.getElementById("btn-ver-progreso");
     if (_btnF) _btnF.style.display = "none";
     const _panF = document.getElementById("panel-progreso");
     if (_panF) _panF.style.display = "none";
-    // Ocultar el menú principal
+    
     document.getElementById("menu-principal")?.classList.add("oculto");
-    // Ocultar todos los submenús y cuestionarios
+    
     document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
     document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
-    // Mostrar el submenú específico
+    
     const submenu = document.getElementById(submenuId);
     if (submenu) {
       submenu.style.display = "block";
     }
-    // Modo normal para la barra inferior del submenú
+    
     navBarModo = 'normal';
     renderNavBar();
-    // Agregar al historial del navegador para que "atrás" vuelva al menú principal
+    
     history.pushState({ submenu: submenuId }, submenuId, `#${submenuId}`);
     window.scrollTo(0, 0);
   };
 
   window.volverAlSubmenu = function(submenuId) {
-    // Siempre va al submenú indicado — el buscador tiene su propio botón flotante
-    // Confirmación si hay respuestas en curso
+    
+    
     if (hayRespuestasMarcadas(currentSection)) {
-      // Mensaje especial para Simulacro IAR: advertir que el progreso se pierde
+      
       if (currentSection === 'simulacro_iar') {
         var _simSt = null;
         try { var _rr = localStorage.getItem('quiz_state_v3'); if (_rr) _simSt = JSON.parse(_rr)['simulacro_iar']; } catch(e) {}
@@ -1866,8 +1840,8 @@ function _hayProgresoEnStorage(seccionId) {
   };
 
   function _ejecutarVolverAlSubmenu(submenuId) {
-    // Simulacro IAR: al salir al submenú SIEMPRE limpiar el progreso (no se guarda)
-    // Excepción: si ya completó el cuestionario (totalShown), no limpiar
+    
+    
     if (currentSection === 'simulacro_iar') {
       var _simStateRaw2 = null;
       try { _simStateRaw2 = JSON.parse(localStorage.getItem('quiz_state_v3') || '{}')['simulacro_iar']; } catch(e) {}
@@ -1878,7 +1852,7 @@ function _hayProgresoEnStorage(seccionId) {
     } else if (currentSection && state[currentSection] && state[currentSection].totalShown) {
       limpiarSeccion(currentSection, true);
     } else if (currentSection) {
-      // Para secciones normales: leer progreso desde localStorage
+      
       if (!_hayProgresoEnStorage(currentSection)) {
         limpiarSeccion(currentSection, true);
       } else {
@@ -1915,7 +1889,7 @@ function _hayProgresoEnStorage(seccionId) {
     });
   };
 
-  // ======== VER RESPUESTAS CORRECTAS ========
+  
   const EXAMENES_IAR_ORDEN = [
     { id: 'iarsep2020', label: 'SEP 2020' }, { id: 'iaroct2020', label: 'OCT 2020' },
     { id: 'iarnov2020', label: 'NOV 2020' }, { id: 'iardic2020', label: 'DIC 2020' },
@@ -1945,16 +1919,16 @@ function _hayProgresoEnStorage(seccionId) {
   ];
 
   window.mostrarRespuestasCorrectas = function() {
-    // ── BLOQUEO: solo admin puede acceder ──
+    
     if (!window._esAdmin) return;
-    // ── BLOQUEO DEMO: permite entrar al panel pero cada examen individual queda bloqueado ──
-    // (el bloqueo por examen se hace en mostrarRespuestasExamen)
-    // Ocultar botón flotante de progreso
+    
+    
+    
     const _btnFR = document.getElementById("btn-ver-progreso");
     if (_btnFR) _btnFR.style.display = "none";
     const _panFR = document.getElementById("panel-progreso");
     if (_panFR) _panFR.style.display = "none";
-    // Ocultar todo lo demás
+    
     document.getElementById('menu-principal')?.classList.add('oculto');
     document.querySelectorAll('.menu-principal[id$="-submenu"]').forEach(s => s.style.display = 'none');
     document.querySelectorAll('.pagina-cuestionario').forEach(p => p.classList.remove('activa'));
@@ -1967,7 +1941,7 @@ function _hayProgresoEnStorage(seccionId) {
     if (!panel) return;
     panel.classList.remove('oculto');
 
-    // Modo respuestas para la barra inferior
+    
     navBarModo = 'respuestas';
     renderNavBar();
 
@@ -1976,31 +1950,31 @@ function _hayProgresoEnStorage(seccionId) {
   };
 
   window.mostrarRespuestasExamen = function(seccionId) {
-    // ── BLOQUEO: solo admin puede acceder ──
+    
     if (!window._esAdmin) return;
-    // ── BLOQUEO DEMO ──
+    
     if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
         !window._demoSeccionesPermitidas.includes(seccionId)) {
       if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
       return;
     }
-    _respuestasSeccionActual = seccionId; // guardar para carrusel
-    // Ocultar submenú de respuestas
+    _respuestasSeccionActual = seccionId; 
+    
     const panel = document.getElementById('panel-respuestas-correctas');
     if (panel) panel.classList.add('oculto');
 
-    // Ocultar otras páginas
+    
     document.querySelectorAll('.pagina-cuestionario').forEach(p => p.classList.remove('activa'));
 
-    // Modo respuestas para la barra inferior
+    
     navBarModo = 'respuestas';
     renderNavBar();
 
-    // Preparar página individual
+    
     const pagina = document.getElementById('pagina-respuestas-examen');
     if (!pagina) return;
 
-    // Título
+    
     const NOMBRES = {
       iarsep2020:'SEP 2020',iaroct2020:'OCT 2020',iarnov2020:'NOV 2020',iardic2020:'DIC 2020',
       iarfeb2021:'FEB 2021',iarmar2021:'MAR 2021',iarabr2021:'ABR 2021',iarmay2021:'MAY 2021',
@@ -2021,10 +1995,10 @@ function _hayProgresoEnStorage(seccionId) {
     const titulo = document.getElementById('titulo-respuestas-examen');
     if (titulo) titulo.textContent = '📋 RESPUESTAS CORRECTAS — IAR ' + (NOMBRES[seccionId] || seccionId.toUpperCase());
 
-    // Renderizar contenido
+    
     const cont = document.getElementById('contenido-respuestas-examen');
     if (cont) {
-      // Solo re-renderizar si cambió el examen
+      
       if (cont.dataset.seccion !== seccionId) {
         _renderRespuestasExamen(cont, seccionId);
         cont.dataset.seccion = seccionId;
@@ -2051,7 +2025,7 @@ function _hayProgresoEnStorage(seccionId) {
       return;
     }
 
-    // No están en memoria — usar polling igual que showSection
+    
     cont.innerHTML = '<p style="text-align:center;color:#64748b;padding:40px;">⏳ Cargando preguntas...</p>';
 
     function _intentarCargar(intentos) {
@@ -2079,13 +2053,13 @@ function _hayProgresoEnStorage(seccionId) {
       const pregDiv = document.createElement('div');
       pregDiv.className = 'rc-pregunta';
 
-      // Número + enunciado
+      
       const enunciado = document.createElement('div');
       enunciado.className = 'rc-enunciado';
       enunciado.textContent = (idx + 1) + '. ' + preg.pregunta;
       pregDiv.appendChild(enunciado);
 
-      // Imagen si existe
+      
       if (preg.imagen) {
         const img = document.createElement('img');
         img.src = getImagenUrl(preg.imagen);
@@ -2095,13 +2069,13 @@ function _hayProgresoEnStorage(seccionId) {
         pregDiv.appendChild(img);
       }
 
-      // Badge de tipo (única / múltiple)
+      
       const badge = document.createElement('span');
       badge.className = 'rc-badge-tipo';
       badge.textContent = preg.multiple ? '✦ Múltiple opción' : '✦ Opción única';
       pregDiv.appendChild(badge);
 
-      // Opciones
+      
       preg.opciones.forEach(function(opc, oi) {
         const esCorrecta = preg.correcta.includes(oi);
         const opcDiv = document.createElement('div');
@@ -2124,7 +2098,7 @@ function _hayProgresoEnStorage(seccionId) {
         pregDiv.appendChild(opcDiv);
       });
 
-      // Explicación si existe
+      
       if (preg.explicacion && preg.explicacion.trim()) {
         const expToggle = document.createElement('button');
         expToggle.className = 'rc-btn-explicacion';
@@ -2150,7 +2124,7 @@ function _hayProgresoEnStorage(seccionId) {
     });
   }
 
-  // ======== Barra de navegación inferior: acceso rápido a todos los exámenes IAR ========
+  
   const NAV_BAR_EXAMENES = [
     { year: '2020', exams: [
       { id: 'iarsep2020', label: 'SEP' }, { id: 'iaroct2020', label: 'OCT' },
@@ -2203,26 +2177,26 @@ function _hayProgresoEnStorage(seccionId) {
   }
 
   function buildNavBar() {
-    // La barra se inyecta como elemento estático al final de cada pagina-cuestionario
-    // y también al final del panel del buscador.
-    // Se crea un único template y se clona/inyecta en cada contenedor.
+    
+    
+    
     _injectNavBarsIntoPages();
   }
 
   function _injectNavBarsIntoPages() {
     const completed = getCompletedSections();
 
-    // Inyectar en todas las paginas-cuestionario EXCEPTO el simulacro
+    
     document.querySelectorAll('.pagina-cuestionario').forEach(function(page) {
-      if (page.id === 'simulacro_iar') return; // no mostrar barra en simulacro
+      if (page.id === 'simulacro_iar') return; 
       _injectOrUpdateNavBar(page, completed);
     });
 
-    // NO inyectar en submenús IAR ni en buscador
+    
   }
 
-  // Variable que indica el modo actual de la barra inferior
-  // 'normal' = navega a cuestionarios IAR | 'respuestas' = navega a respuestas correctas
+  
+  
   let navBarModo = 'normal';
 
   function _buildNavBarElement(completed) {
@@ -2236,18 +2210,18 @@ function _hayProgresoEnStorage(seccionId) {
       : '📅 ACCESO RÁPIDO A EXÁMENES IAR';
     bar.appendChild(titulo);
 
-    // Una sola fila con wrap — año + botones fluyen juntos
+    
     const fila = document.createElement('div');
     fila.className = 'nav-bar-fila';
 
     NAV_BAR_EXAMENES.forEach(function(grupo) {
-      // Etiqueta del año inline
+      
       const yearLabel = document.createElement('span');
       yearLabel.className = 'nav-bar-year';
       yearLabel.textContent = grupo.year;
       fila.appendChild(yearLabel);
 
-      // Botones de meses
+      
       grupo.exams.forEach(function(exam) {
         const btn = document.createElement('button');
         btn.className = 'nav-bar-btn' + (completed[exam.id] ? ' nav-bar-btn-completado' : '');
@@ -2270,7 +2244,7 @@ function _hayProgresoEnStorage(seccionId) {
   }
 
   function _injectOrUpdateNavBar(container, completed) {
-    // Remover barra anterior si existe
+    
     const old = container.querySelector('.nav-bar-inferior-static');
     if (old) old.remove();
 
@@ -2279,7 +2253,7 @@ function _hayProgresoEnStorage(seccionId) {
   }
 
   function renderNavBar() {
-    // Actualiza colores de todos los botones en todas las barras estáticas inyectadas
+    
     const completed = getCompletedSections();
     document.querySelectorAll('.nav-bar-inferior-static .nav-bar-btn').forEach(function(btn) {
       const sid = btn.getAttribute('data-seccion');
@@ -2289,7 +2263,7 @@ function _hayProgresoEnStorage(seccionId) {
         btn.classList.remove('nav-bar-btn-completado');
       }
     });
-    // Actualizar títulos según el modo
+    
     const tituloTexto = navBarModo === 'respuestas'
       ? '📅 ACCESO RÁPIDO - EXÁMENES IAR - RESPUESTAS CORRECTAS'
       : '📅 ACCESO RÁPIDO - EXÁMENES IAR - CUESTIONARIOS';
@@ -2300,22 +2274,22 @@ function _hayProgresoEnStorage(seccionId) {
   window.renderNavBar = renderNavBar;
 
   function navegarDesdeNavBar(seccionId) {
-    // ── BLOQUEO DEMO ──
+    
     if (window._demoCheckEnabled && window._demoSeccionesPermitidas &&
         !window._demoSeccionesPermitidas.includes(seccionId)) {
       if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
       return;
     }
-    // Si ya estamos en ese cuestionario, no hacer nada
+    
     if (currentSection === seccionId) return;
 
-    // ¿Hay un cuestionario en curso?
+    
     const hayCuestionarioEnCurso = currentSection && state[currentSection] &&
       !state[currentSection].totalShown &&
       state[currentSection].graded &&
       Object.keys(state[currentSection].graded).some(k => state[currentSection].graded[k]);
 
-    // ¿Hay una búsqueda en curso?
+    
     const panelBuscador = document.getElementById('buscador-preguntas');
     const hayBusqueda = panelBuscador && !panelBuscador.classList.contains('oculto') &&
       (document.getElementById('buscador-input')?.value || '').trim().length >= 2;
@@ -2347,7 +2321,7 @@ function _hayProgresoEnStorage(seccionId) {
   }
 
   function ejecutarNavegacionNavBar(seccionId) {
-    // Limpiar estado del cuestionario actual si es necesario
+    
     if (currentSection && state[currentSection]) {
       const s = state[currentSection];
       if (s.totalShown) {
@@ -2401,12 +2375,12 @@ function _hayProgresoEnStorage(seccionId) {
     document.body.appendChild(overlay);
   }
 
-  // Actualizar colores de la barra al volver al menú o submenú
+  
   const _origShowMenu = showMenu;
-  // (hook will be applied after DOMContentLoaded)
+  
 
-  // ======== Botón flotante "Ver mi progreso" ========
-  // Función para abrir/cerrar el panel de progreso (reutilizable desde botones inline)
+  
+  
   window.togglePanelProgreso = function() {
     const panel = document.getElementById("panel-progreso");
     if (!panel) return;
@@ -2435,7 +2409,7 @@ function _hayProgresoEnStorage(seccionId) {
     btn.style.fontWeight = "bold";
     btn.style.background = "#2ecc71";
     btn.style.color = "#fff";
-    // El botón flotante solo es visible en el menú principal
+    
     btn.style.display = "none";
     document.body.appendChild(btn);
 
@@ -2477,7 +2451,7 @@ function _hayProgresoEnStorage(seccionId) {
     content.style.marginTop = "10px";
     content.innerHTML = "<em>Sin intentos aún.</em>";
 
-    // Botón borrar historial
+    
     const btnBorrar = document.createElement("button");
     btnBorrar.id = "btn-borrar-historial";
     btnBorrar.textContent = "🗑️ Borrar mi historial";
@@ -2486,7 +2460,7 @@ function _hayProgresoEnStorage(seccionId) {
       if (!confirm("¿Seguro que querés borrar todo tu historial de intentos?\nEsta acción no se puede deshacer.")) return;
       attemptLog = [];
       saveJSON(ATTEMPT_LOG_KEY, []);
-      // Borrar también en Firestore
+      
       if (_firestoreUID && _firestoreDB) {
         import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js").then(function(fsModule) {
           const ref = fsModule.doc(_firestoreDB, "progreso", _firestoreUID, "datos", "historial");
@@ -2509,7 +2483,7 @@ function _hayProgresoEnStorage(seccionId) {
     close.addEventListener("click", () => (panel.style.display = "none"));
   }
 
-  // ======== Agregar botón estático "Ver mi progreso" en páginas de cuestionario ========
+  
   function insertarBotonesProgresoInline() {
     document.querySelectorAll(".pagina-cuestionario").forEach(function(pagina) {
       pagina.querySelectorAll("div").forEach(function(div) {
@@ -2585,7 +2559,7 @@ function _hayProgresoEnStorage(seccionId) {
     });
   }
 
-  // ======== Inicio ========
+  
   document.addEventListener("DOMContentLoaded", () => {
     buildProgressUI();
     insertarBotonesProgresoInline();
@@ -2593,21 +2567,21 @@ function _hayProgresoEnStorage(seccionId) {
     setupBrowserNavigation();
     clearScrollPosition();
 
-    // ── Limpiar progreso del Simulacro IAR si el usuario recarga o cierra la página ──
-    // El progreso del simulacro NO se guarda entre sesiones si está incompleto.
-    // "pagehide" se dispara en recarga, cierre de pestaña y navegación a otra página.
+    
+    
+    
     window.addEventListener('pagehide', function() {
       try {
         var rawSt = localStorage.getItem('quiz_state_v3');
         if (!rawSt) return;
         var allSt = JSON.parse(rawSt);
         var simSt = allSt['simulacro_iar'];
-        // Solo limpiar si hay progreso incompleto (respondió ≥1 pero no terminó)
+        
         if (simSt && !simSt.totalShown) {
           var nGraded = simSt.graded ? Object.keys(simSt.graded).filter(function(k){ return simSt.graded[k]; }).length : 0;
           var nAnswers = simSt.answers ? Object.keys(simSt.answers).filter(function(k){ var a = simSt.answers[k]; return Array.isArray(a) && a.length > 0; }).length : 0;
           if (nGraded > 0 || nAnswers > 0) {
-            // Limpiar estado en localStorage
+            
             delete allSt['simulacro_iar'];
             localStorage.setItem('quiz_state_v3', JSON.stringify(allSt));
             localStorage.removeItem('simulacro_iar_preguntas_v1');
@@ -2618,12 +2592,12 @@ function _hayProgresoEnStorage(seccionId) {
       } catch(e) {}
     });
 
-  // ── Navegación inicial: esperar a que Firebase confirme la sesión ──────────
-  // firebase-auth.js llama window._onFirebaseSessionReady(irAMenu) cuando está listo.
-  //   irAMenu=true  → login manual → siempre mostrar menú principal
-  //   irAMenu=false → recarga → restaurar el hash actual (sección, submenú, etc.)
-  // Si Firebase ya estaba listo antes de este punto (poco probable pero posible),
-  // el flag window._firebaseSessionReady lo indica.
+  
+  
+  
+  
+  
+  
 
   const SECCIONES_VALIDAS = [
     'iarsep2020','iaroct2020','iarnov2020','iardic2020',
@@ -2664,25 +2638,25 @@ function _hayProgresoEnStorage(seccionId) {
     }
   }
 
-  // Callback que dispara firebase-auth.js al confirmar la sesión
+  
   window._onFirebaseSessionReady = function(irAMenu) {
     if (irAMenu) {
-      // Login manual → menú siempre (firebase-auth.js ya maneja la navegación visual,
-      // pero aseguramos que currentSection quede en null)
+      
+      
       currentSection = null;
     } else {
-      // Recarga con sesión vigente → restaurar la página que el usuario tenía abierta
+      
       _navegarSegunHash();
     }
   };
 
-  // Por si firebase-auth.js ya disparó el callback antes de este DOMContentLoaded
+  
   if (window._firebaseSessionReady) {
     _navegarSegunHash();
   }
   });
 
-  // ======== MEDIDAS DE SEGURIDAD ========
+  
   
   document.addEventListener('contextmenu', function(e) {
       e.preventDefault();
@@ -2701,8 +2675,8 @@ function _hayProgresoEnStorage(seccionId) {
       }
   });
 
-  // Detección de DevTools por outer/inner eliminada: genera falsos positivos
-  // con cualquier nivel de zoom del navegador mayor a ~150%.
+  
+  
 
   document.addEventListener('dragstart', function(e) {
       e.preventDefault();
@@ -2729,13 +2703,12 @@ function _hayProgresoEnStorage(seccionId) {
       console.clear();
   }, 3000);
 
-
-  // ======== SIMULACRO IAR — 20 preguntas de la base IAR mensual ========
-  // REGLA: siempre nuevo simulacro al entrar, SALVO que haya ≥1 respuesta guardada
-  //        (en cuyo caso se conserva hasta terminar, reiniciar o crear nuevo).
+  
+  
+  
 
   const SIMULACRO_IAR_KEY   = 'simulacro_iar_preguntas_v1';
-  const SIMULACRO_IAR_PROGRESO = 'simulacro_iar_tiene_progreso_v1'; // '1' si respondió ≥1
+  const SIMULACRO_IAR_PROGRESO = 'simulacro_iar_tiene_progreso_v1'; 
 
   const SECCIONES_IAR_SIMULACRO = [
     'iarsep2020','iaroct2020','iarnov2020','iardic2020',
@@ -2748,7 +2721,7 @@ function _hayProgresoEnStorage(seccionId) {
   ];
 
   function _tieneProgresoSimulacroIAR() {
-    // Leer desde localStorage (fuente de verdad: script_onebyone.js escribe ahí directamente)
+    
     return _hayProgresoEnStorage('simulacro_iar');
   }
 
@@ -2768,7 +2741,7 @@ function _hayProgresoEnStorage(seccionId) {
       return [];
     }
 
-    // Separar preguntas independientes y grupos
+    
     var unidadesMap = {};
     var unidadesSueltas = [];
     todasLasPreguntas.forEach(function(item) {
@@ -2781,19 +2754,19 @@ function _hayProgresoEnStorage(seccionId) {
       }
     });
 
-    // Ordenar cada grupo internamente: por ordenEnGrupo (si existe), luego por índice original
+    
     Object.keys(unidadesMap).forEach(function(gid) {
       unidadesMap[gid].sort(function(a, b) {
         var oa = (a.pregunta.ordenEnGrupo != null) ? Number(a.pregunta.ordenEnGrupo) : a.idx;
         var ob = (b.pregunta.ordenEnGrupo != null) ? Number(b.pregunta.ordenEnGrupo) : b.idx;
         if (oa !== ob) return oa - ob;
-        return a.idx - b.idx; // desempate por índice original en la sección
+        return a.idx - b.idx; 
       });
     });
 
     var unidadesGrupo = Object.values(unidadesMap);
 
-    // Validar integridad de grupos: descartar grupos incompletos (faltan preguntas en Firestore)
+    
     unidadesGrupo = unidadesGrupo.filter(function(grupo) {
       var esperadas = grupo[0] && grupo[0].pregunta.totalEnGrupo ? Number(grupo[0].pregunta.totalEnGrupo) : grupo.length;
       var completo = grupo.length === esperadas;
@@ -2804,34 +2777,34 @@ function _hayProgresoEnStorage(seccionId) {
       return completo;
     });
 
-    // Mezclar independientes y elegir exactamente 1 grupo (si cabe)
+    
     var sueltas = shuffle(unidadesSueltas, 'sim-sueltas-' + Date.now());
     var grupos  = shuffle(unidadesGrupo,  'sim-grupos-'  + Date.now());
 
-    // Primero elegir las preguntas sueltas que vamos a usar
+    
     var grupoElegido = null;
     var cantGrupo = 0;
     if (grupos.length > 0 && grupos[0].length <= TARGET - 1) {
-      grupoElegido = grupos[0]; // ya está ordenado internamente por ordenEnGrupo
+      grupoElegido = grupos[0]; 
       cantGrupo = grupoElegido.length;
       console.log('[SimulacroIAR] Grupo elegido: ' + grupoElegido[0].pregunta.grupoId +
         ' (' + cantGrupo + ' preguntas, ordenadas por ordenEnGrupo: ' +
         grupoElegido.map(function(g){ return g.pregunta.ordenEnGrupo; }).join('→') + ')');
     }
 
-    // Tomar las sueltas necesarias para llegar a TARGET
+    
     var sueltasElegidas = [];
     for (var i = 0; i < sueltas.length && sueltasElegidas.length < TARGET - cantGrupo; i++) {
       sueltasElegidas.push(sueltas[i][0]);
     }
 
-    // Insertar el bloque del grupo en una posición aleatoria dentro de las sueltas
-    // El bloque siempre es contiguo y en el orden correcto (ordenEnGrupo 1→2→3→4)
+    
+    
     var seleccionadas = sueltasElegidas.slice();
     if (grupoElegido) {
-      // Posición aleatoria: entre 0 y sueltasElegidas.length (inclusive)
+      
       var posInsercion = Math.floor(Math.random() * (sueltasElegidas.length + 1));
-      // Insertar de adelante hacia atrás para mantener el orden correcto del grupo
+      
       for (var j = grupoElegido.length - 1; j >= 0; j--) {
         seleccionadas.splice(posInsercion, 0, grupoElegido[j]);
       }
@@ -2856,13 +2829,13 @@ function _hayProgresoEnStorage(seccionId) {
   }
 
   function _limpiarSimulacroIARSinProgreso() {
-    // Limpiar el timer del simulacro (widget + localStorage key)
+    
     if (window._simulacroTimer) window._simulacroTimer.limpiar();
     localStorage.removeItem(SIMULACRO_IAR_KEY);
     try { localStorage.removeItem(SIMULACRO_IAR_PROGRESO); } catch(e) {}
     delete state['simulacro_iar'];
     saveJSON(STORAGE_KEY, state);
-    // Borrar en Firestore para evitar restauración de progreso viejo
+    
     _borrarSeccionFirestore('simulacro_iar');
     if (window.puntajesPorSeccion) delete window.puntajesPorSeccion['simulacro_iar'];
     delete preguntasPorSeccion['simulacro_iar'];
@@ -2871,8 +2844,8 @@ function _hayProgresoEnStorage(seccionId) {
     if (rt) { rt.textContent = ''; rt.className = 'resultado-final'; }
   }
 
-  // Carga secciones desde Firestore para recuperar preguntas del simulacro en progreso
-  // (caso: usuario tenía progreso pero recargó la página y la memoria se perdió)
+  
+  
   function _cargarConProgresoDesdeFirestore() {
     var cont = document.getElementById('cuestionario-simulacro_iar');
     if (cont) {
@@ -2897,13 +2870,13 @@ function _hayProgresoEnStorage(seccionId) {
       });
       Promise.all(promesas).then(function() {
         if (currentSection !== 'simulacro_iar') return;
-        // Ahora intentar recuperar las preguntas guardadas en SIMULACRO_IAR_KEY
+        
         var guardadas = loadJSON(SIMULACRO_IAR_KEY, null);
         if (guardadas && guardadas.length > 0) {
           preguntasPorSeccion['simulacro_iar'] = guardadas.map(function(i) { return i.pregunta; });
           generarCuestionario('simulacro_iar');
         } else {
-          // Fallback: generar nuevo (no deberíamos llegar aquí)
+          
           var items = generarNuevasPreguntasSimulacroIAR();
           if (items && items.length > 0) {
             preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
@@ -2915,18 +2888,18 @@ function _hayProgresoEnStorage(seccionId) {
     _esperar(0);
   }
 
-  // Exponer para firebase-auth.js (logout) y otros modulos externos
+  
   window._tieneProgresoSimulacroIARPublic = _tieneProgresoSimulacroIAR;
   window._persistirPreguntasSimulacroIAREnStorage = _persistirPreguntasSimulacroIAREnStorage;
 
   window.inicializarSimulacroIAR = function() {
-    // ── BLOQUEO DEMO: esperar a que la licencia esté verificada ──
-    // Esto evita que un usuario demo acceda al simulacro con F5 o navegación
-    // rápida antes de que _demoCheckEnabled esté activo.
+    
+    
+    
     var _licPromise = window._licenciaVerificada || Promise.resolve({ esDemo: false });
     _licPromise.then(function(lic) {
       if (lic.esDemo) {
-        // Redirigir al menú y mostrar modal de restricción
+        
         if (typeof mostrarSeccion === 'function') mostrarSeccion('menu-principal');
         else { document.getElementById('simulacro_iar')?.classList.remove('activa'); document.getElementById('menu-principal')?.classList.remove('oculto'); }
         if (typeof mostrarModalRestriccionDemo === 'function') mostrarModalRestriccionDemo();
@@ -2937,15 +2910,15 @@ function _hayProgresoEnStorage(seccionId) {
   };
 
   function _inicializarSimulacroIARInterno() {
-    // Progreso real = respondió ≥1 pregunta Y no terminó (totalShown)
+    
     if (_tieneProgresoSimulacroIAR()) {
-      // Intentar recuperar preguntas desde memoria primero
+      
       if (preguntasPorSeccion['simulacro_iar'] && preguntasPorSeccion['simulacro_iar'].length > 0) {
         console.log('[SimulacroIAR] Progreso detectado (memoria) → conservando y mostrando');
         generarCuestionario('simulacro_iar');
         return;
       }
-      // Si la memoria está vacía (ej: recarga de página), recuperar desde localStorage
+      
       var guardadas = loadJSON(SIMULACRO_IAR_KEY, null);
       if (guardadas && guardadas.length > 0) {
         console.log('[SimulacroIAR] Progreso detectado (localStorage) → recuperando ' + guardadas.length + ' preguntas');
@@ -2953,25 +2926,25 @@ function _hayProgresoEnStorage(seccionId) {
         generarCuestionario('simulacro_iar');
         return;
       }
-      // Si tampoco hay en localStorage, necesitamos recargar desde Firestore
-      // para poder mostrar las preguntas con el progreso guardado
+      
+      
       console.log('[SimulacroIAR] Progreso detectado pero sin preguntas en cache → recargando desde Firestore');
-      // Continúa al flujo de carga desde Firestore (no hace return)
-      // pero SIN limpiar el progreso (_limpiarSimulacroIARSinProgreso NO se llama aquí)
+      
+      
       _cargarConProgresoDesdeFirestore();
       return;
     }
 
-    // Sin progreso (nuevo inicio, reinicio sin responder, o vuelta al menú sin responder) → nuevo simulacro
+    
     _limpiarSimulacroIARSinProgreso();
 
-    // Verificar secciones faltantes en memoria
+    
     var seccionesFaltantes = SECCIONES_IAR_SIMULACRO.filter(function(sec) {
       return !Array.isArray(preguntasPorSeccion[sec]) || preguntasPorSeccion[sec].length === 0;
     });
 
     if (seccionesFaltantes.length === 0) {
-      // Todas en memoria → generar y mostrar
+      
       var items = generarNuevasPreguntasSimulacroIAR();
       if (items && items.length > 0) {
         preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
@@ -2980,7 +2953,7 @@ function _hayProgresoEnStorage(seccionId) {
       return;
     }
 
-    // Hay secciones sin cargar → cargar todas en paralelo desde Firestore
+    
     var cont = document.getElementById('cuestionario-simulacro_iar');
     if (cont) {
       cont.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
@@ -3039,25 +3012,25 @@ function _hayProgresoEnStorage(seccionId) {
       '¿Reiniciar este simulacro?',
       '¿Estás seguro de que deseas reiniciar este simulacro?\n\nSe borrarán TODAS tus respuestas y la puntuación. Si deseás generar preguntas NUEVAS, usá el botón "🎲 Crear nuevo cuestionario IAR".\nEsta acción no se puede deshacer.',
       function() {
-        // Guardar las preguntas actuales ANTES de limpiar el estado
+        
         var preguntasActuales = preguntasPorSeccion['simulacro_iar']
           ? preguntasPorSeccion['simulacro_iar'].slice()
           : null;
 
-        // Limpiar solo el estado de progreso (respuestas, calificaciones) — SIN borrar las preguntas del localStorage
+        
         delete state['simulacro_iar'];
         saveJSON(STORAGE_KEY, state);
-        // Borrar en Firestore para evitar restauración de progreso viejo
+        
         _borrarSeccionFirestore('simulacro_iar');
         if (window.puntajesPorSeccion) delete window.puntajesPorSeccion['simulacro_iar'];
         var rt = document.getElementById('resultado-total-simulacro_iar');
         if (rt) { rt.textContent = ''; rt.className = 'resultado-final'; }
 
-        // Restaurar las MISMAS preguntas (no generar nuevas)
+        
         if (preguntasActuales && preguntasActuales.length > 0) {
           preguntasPorSeccion['simulacro_iar'] = preguntasActuales;
         } else {
-          // Fallback: si por algún motivo no hay preguntas en memoria, generar nuevas
+          
           var items = generarNuevasPreguntasSimulacroIAR();
           if (items && items.length > 0) {
             preguntasPorSeccion['simulacro_iar'] = items.map(function(i) { return i.pregunta; });
@@ -3071,12 +3044,12 @@ function _hayProgresoEnStorage(seccionId) {
     );
   };
 
-  // Diálogo de opciones al terminar simulacro_iar
+  
   document.addEventListener('DOMContentLoaded', function() {
     window.mostrarPuntuacionTotal = function(seccionId) {
       mostrarResultadoFinal(seccionId);
       if (seccionId !== 'simulacro_iar') return;
-      // Mostrar diálogo de opciones tras ver la puntuación
+      
       setTimeout(function() {
         var dlg = document.createElement('div');
         dlg.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
@@ -3096,18 +3069,18 @@ function _hayProgresoEnStorage(seccionId) {
         };
         document.getElementById('sim-dlg-reiniciar').onclick = function() {
           dlg.remove();
-          // Guardar las preguntas actuales ANTES de limpiar el estado
+          
           var preguntasActuales = preguntasPorSeccion['simulacro_iar']
             ? preguntasPorSeccion['simulacro_iar'].slice()
             : null;
           delete state['simulacro_iar'];
           saveJSON(STORAGE_KEY, state);
-          // Borrar en Firestore para evitar restauración de progreso viejo
+          
           _borrarSeccionFirestore('simulacro_iar');
           if (window.puntajesPorSeccion) delete window.puntajesPorSeccion['simulacro_iar'];
           var rt = document.getElementById('resultado-total-simulacro_iar');
           if (rt) { rt.textContent = ''; rt.className = 'resultado-final'; }
-          // Restaurar las MISMAS preguntas
+          
           if (preguntasActuales && preguntasActuales.length > 0) {
             preguntasPorSeccion['simulacro_iar'] = preguntasActuales;
           }
@@ -3127,13 +3100,13 @@ function _hayProgresoEnStorage(seccionId) {
   });
 
   function mostrarDialogoConfirmacion(titulo, mensaje, onAceptar, onCancelar, optsExtra) {
-    // optsExtra (opcional): { labelAceptar, labelCancelar, colorAceptar }
+    
     var opts = optsExtra || {};
     var labelAceptar  = opts.labelAceptar  || 'Aceptar';
     var labelCancelar = opts.labelCancelar || 'Cancelar';
     var colorAceptar  = opts.colorAceptar  || '#28a745';
 
-    // Crear overlay
+    
     const overlay = document.createElement('div');
     overlay.style.position = 'fixed';
     overlay.style.top = '0';
@@ -3146,7 +3119,7 @@ function _hayProgresoEnStorage(seccionId) {
     overlay.style.justifyContent = 'center';
     overlay.style.alignItems = 'center';
     
-    // Crear diálogo
+    
     const dialogo = document.createElement('div');
     dialogo.style.backgroundColor = 'white';
     dialogo.style.padding = '30px';
@@ -3163,7 +3136,7 @@ function _hayProgresoEnStorage(seccionId) {
     tituloEl.style.fontSize = '1.3rem';
     
     const mensajeEl = document.createElement('p');
-    // Respetar saltos de línea en el mensaje
+    
     mensajeEl.style.whiteSpace = 'pre-line';
     mensajeEl.textContent = mensaje;
     mensajeEl.style.marginBottom = '25px';
@@ -3177,7 +3150,7 @@ function _hayProgresoEnStorage(seccionId) {
     botonesDiv.style.justifyContent = 'center';
     botonesDiv.style.flexWrap = 'wrap';
     
-    // Botón Cancelar (va primero, según módulo 7)
+    
     const btnCancelar = document.createElement('button');
     btnCancelar.textContent = labelCancelar;
     btnCancelar.className = 'btn-responder';
@@ -3188,7 +3161,7 @@ function _hayProgresoEnStorage(seccionId) {
       if (onCancelar) onCancelar();
     };
 
-    // Botón Aceptar (va segundo, según módulo 7)
+    
     const btnAceptar = document.createElement('button');
     btnAceptar.textContent = labelAceptar;
     btnAceptar.className = 'btn-responder';
@@ -3211,9 +3184,6 @@ function _hayProgresoEnStorage(seccionId) {
   
 
 })();
-/* ======================================================
-   BUSCADOR DE PREGUNTAS
-   ====================================================== */
 
 (function () {
 
@@ -3238,7 +3208,7 @@ function _hayProgresoEnStorage(seccionId) {
 
     function nombreExamen(id) { return NOMBRES_EXAMENES[id] || id.toUpperCase(); }
 
-    // Normaliza tildes/acentos para búsqueda sin distinción
+    
     function normalizarTexto(str) {
         if (!str) return '';
         return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -3692,7 +3662,7 @@ function _hayProgresoEnStorage(seccionId) {
             });
         }
 
-        // Si es usuario demo, mostrar aviso de contenido adicional bloqueado
+        
         if (window._demoCheckEnabled && window._demoSeccionesPermitidas) {
             var seccionesNoDisponibles = ORDEN_SECCIONES.filter(function(sid) {
                 return !window._demoSeccionesPermitidas.includes(sid) &&
@@ -3707,32 +3677,26 @@ function _hayProgresoEnStorage(seccionId) {
         }
 
         resDiv.innerHTML = html;
-    } // fin _ejecutarBusqueda
+    } 
 
 })();
 
-/* ============================================================
-   TIMER SIMULACRO IAR — 1 hora 30 minutos
-   - Solo activo en seccion simulacro_iar
-   - Notificaciones toast a los 30, 15, 5, 1 minuto restantes
-   - Al expirar: califica todas las pendientes y muestra resultado
-   ============================================================ */
 (function () {
 
-  var SIMULACRO_TIMER_KEY  = 'simulacro_iar_timer_end_v1'; // timestamp ISO de fin
-  var SIMULACRO_DURACION_MS = 90 * 60 * 1000; // 1h 30min en ms
+  var SIMULACRO_TIMER_KEY  = 'simulacro_iar_timer_end_v1'; 
+  var SIMULACRO_DURACION_MS = 90 * 60 * 1000; 
 
-  var _timerId       = null;  // setInterval del reloj
-  var _toastTimeouts = [];    // setTimeout de toasts programados
+  var _timerId       = null;  
+  var _toastTimeouts = [];    
   var _timerActivo   = false;
 
-  // ── Inyectar estilos CSS una sola vez ──────────────────────────────
+  
   function _inyectarCSS() {
     if (document.getElementById('sim-timer-styles')) return;
     var style = document.createElement('style');
     style.id = 'sim-timer-styles';
     style.textContent = [
-      /* ── Reloj flotante ── */
+      
       '#sim-timer-widget{',
         'position:fixed;top:16px;right:16px;z-index:10000;',
         'display:flex;align-items:center;gap:8px;',
@@ -3767,7 +3731,7 @@ function _hayProgresoEnStorage(seccionId) {
         'color:#f8fafc;min-width:52px;text-align:center;',
         'text-shadow:0 1px 4px rgba(0,0,0,0.4);',
       '}',
-      /* ── Toast ── */
+      
       '.sim-toast{',
         'position:fixed;left:50%;transform:translateX(-50%) translateY(-24px);',
         'z-index:10100;',
@@ -3789,7 +3753,7 @@ function _hayProgresoEnStorage(seccionId) {
       '.sim-toast.amarillo{background:linear-gradient(135deg,#713f12 0%,#854d0e 100%);color:#fef9c3;border:1px solid rgba(253,224,71,0.25);}',
       '.sim-toast.naranja{background:linear-gradient(135deg,#7c2d12 0%,#9a3412 100%);color:#ffedd5;border:1px solid rgba(253,186,116,0.25);}',
       '.sim-toast.rojo{background:linear-gradient(135deg,#7f1d1d 0%,#991b1b 100%);color:#fee2e2;border:1px solid rgba(252,165,165,0.25);}',
-      /* ── Overlay tiempo agotado ── */
+      
       '#sim-timeout-overlay{',
         'position:fixed;top:0;left:0;width:100%;height:100%;',
         'background:rgba(0,0,0,0.72);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);',
@@ -3802,7 +3766,7 @@ function _hayProgresoEnStorage(seccionId) {
         'box-shadow:0 32px 80px rgba(0,0,0,0.35);',
         'animation:sim-slidein 0.5s cubic-bezier(.4,0,.2,1);',
       '}',
-      /* ── Keyframes ── */
+      
       '@keyframes sim-blink{0%,100%{opacity:1}50%{opacity:.35}}',
       '@keyframes sim-pulse-red{0%,100%{box-shadow:0 8px 32px rgba(0,0,0,0.35),0 0 0 0 rgba(239,68,68,0)}50%{box-shadow:0 8px 32px rgba(0,0,0,0.35),0 0 0 8px rgba(239,68,68,0.25)}}',
       '@keyframes sim-fadein{from{opacity:0}to{opacity:1}}',
@@ -3811,7 +3775,7 @@ function _hayProgresoEnStorage(seccionId) {
     document.head.appendChild(style);
   }
 
-  // ── Crear / obtener el widget de reloj ────────────────────────────
+  
   function _crearWidget() {
     if (document.getElementById('sim-timer-widget')) return;
     var w = document.createElement('div');
@@ -3843,7 +3807,7 @@ function _hayProgresoEnStorage(seccionId) {
       : _z(minutos) + ':' + _z(segundos);
     d.textContent = texto;
 
-    // Cambiar color del widget según urgencia
+    
     w.classList.remove('urgente','advertencia');
     if (msRestantes <= 60 * 1000)        w.classList.add('urgente');
     else if (msRestantes <= 5 * 60 * 1000) w.classList.add('advertencia');
@@ -3851,11 +3815,11 @@ function _hayProgresoEnStorage(seccionId) {
 
   function _z(n) { return n < 10 ? '0' + n : '' + n; }
 
-  // ── Toast de aviso ────────────────────────────────────────────────
+  
   function _mostrarToast(color, icono, titulo, subtitulo) {
     var toast = document.createElement('div');
     toast.className = 'sim-toast ' + color;
-    // Calcular posición vertical: debajo del header si existe, sino 20px
+    
     var topPx = 20;
     var header = document.querySelector('header, .header, nav, .navbar');
     if (header) topPx = header.getBoundingClientRect().bottom + 12;
@@ -3868,14 +3832,14 @@ function _hayProgresoEnStorage(seccionId) {
       '</div>';
     document.body.appendChild(toast);
 
-    // Animar entrada
+    
     requestAnimationFrame(function() {
       requestAnimationFrame(function() {
         toast.classList.add('visible');
       });
     });
 
-    // Duración visible: 6 segundos (legible sin ser molesto)
+    
     var duracion = 6000;
     setTimeout(function() {
       toast.classList.remove('visible');
@@ -3883,33 +3847,33 @@ function _hayProgresoEnStorage(seccionId) {
     }, duracion);
   }
 
-  // ── Programar toasts según tiempo restante ────────────────────────
+  
   function _programarToasts(msRestantes) {
-    // Limpiar toasts anteriores si hubiera
+    
     _toastTimeouts.forEach(function(id) { clearTimeout(id); });
     _toastTimeouts = [];
 
     var alertas = [
       {
-        en: 30 * 60 * 1000, // 30 min restantes
+        en: 30 * 60 * 1000, 
         color: 'verde', icono: '⏱️',
         titulo: 'Quedan 30 minutos',
         subtitulo: 'Vas muy bien — seguí respondiendo con calma.'
       },
       {
-        en: 15 * 60 * 1000, // 15 min
+        en: 15 * 60 * 1000, 
         color: 'amarillo', icono: '🕐',
         titulo: 'Quedan 15 minutos',
         subtitulo: 'Revisá las preguntas que te quedaron pendientes.'
       },
       {
-        en: 5 * 60 * 1000, // 5 min
+        en: 5 * 60 * 1000, 
         color: 'naranja', icono: '⚠️',
         titulo: '¡Solo 5 minutos!',
         subtitulo: 'Intentá responder las preguntas que te faltan.'
       },
       {
-        en: 1 * 60 * 1000, // 1 min
+        en: 1 * 60 * 1000, 
         color: 'rojo', icono: '🔴',
         titulo: '¡Último minuto!',
         subtitulo: 'El simulacro se cerrará automáticamente en 60 segundos.'
@@ -3918,7 +3882,7 @@ function _hayProgresoEnStorage(seccionId) {
 
     alertas.forEach(function(alerta) {
       var delay = msRestantes - alerta.en;
-      if (delay < 0) return; // ya pasó ese momento
+      if (delay < 0) return; 
       var id = setTimeout(function() {
         if (!_timerActivo) return;
         _mostrarToast(alerta.color, alerta.icono, alerta.titulo, alerta.subtitulo);
@@ -3927,7 +3891,7 @@ function _hayProgresoEnStorage(seccionId) {
     });
   }
 
-  // ── Forzar respuesta de todas las preguntas pendientes ────────────
+  
   function _finalizarSimulacroForzado() {
     _timerActivo = false;
     if (_timerId) { clearInterval(_timerId); _timerId = null; }
@@ -3940,14 +3904,14 @@ function _hayProgresoEnStorage(seccionId) {
       ? (preguntasPorSeccion['simulacro_iar'] || [])
       : [];
 
-    // Contar sin responder
+    
     var sinResponder = 0;
     var s = (typeof state !== 'undefined') ? state['simulacro_iar'] : null;
 
     preguntas.forEach(function(preg, idx) {
       if (!s || !s.graded || !s.graded[idx]) {
         sinResponder++;
-        // Marcar como incorrecta (sin respuesta)
+        
         if (!window.puntajesPorSeccion) window.puntajesPorSeccion = {};
         if (!window.puntajesPorSeccion['simulacro_iar']) {
           window.puntajesPorSeccion['simulacro_iar'] = Array(preguntas.length).fill(null);
@@ -3956,20 +3920,20 @@ function _hayProgresoEnStorage(seccionId) {
             window.puntajesPorSeccion['simulacro_iar'][idx] === undefined) {
           window.puntajesPorSeccion['simulacro_iar'][idx] = 0;
         }
-        // Marcar visualmente en el DOM
+        
         var puntajeElem = document.getElementById('puntaje-simulacro_iar-' + idx);
         if (puntajeElem && puntajeElem.textContent === '') {
           puntajeElem.textContent = '⏰ Sin responder (0)';
           puntajeElem.style.color = '#94a3b8';
         }
-        // Deshabilitar inputs
+        
         var inputs = Array.from(document.getElementsByName('preguntasimulacro_iar' + idx));
         inputs.forEach(function(inp) { inp.disabled = true; });
         var btn = inputs.length > 0 && inputs[0].closest
           ? inputs[0].closest('.pregunta')?.querySelector('button.btn-responder')
           : null;
         if (btn) btn.disabled = true;
-        // Guardar en state
+        
         if (s) {
           if (!s.graded) s.graded = {};
           s.graded[idx] = true;
@@ -3979,24 +3943,24 @@ function _hayProgresoEnStorage(seccionId) {
       }
     });
 
-    // Guardar estado
+    
     if (typeof saveJSON === 'function' && typeof state !== 'undefined' && state['simulacro_iar']) {
       try { saveJSON('quiz_state_v3', state); } catch(e) {}
     }
 
-    // Calcular puntaje total
+    
     var totalScore = 0;
     if (window.puntajesPorSeccion && window.puntajesPorSeccion['simulacro_iar']) {
       window.puntajesPorSeccion['simulacro_iar'].forEach(function(p) { totalScore += (p || 0); });
     }
 
-    // Mostrar overlay de tiempo agotado
+    
     _mostrarOverlayTimeout(totalScore, preguntas.length, sinResponder);
   }
 
-  // ── Overlay final de tiempo agotado ──────────────────────────────
+  
   function _mostrarOverlayTimeout(score, total, sinResponder) {
-    // Registrar intento si aún no se registró
+    
     if (typeof mostrarResultadoFinal === 'function') {
       try { mostrarResultadoFinal('simulacro_iar'); } catch(e) {}
     }
@@ -4062,20 +4026,20 @@ function _hayProgresoEnStorage(seccionId) {
     };
   }
 
-  // ── Arrancar el timer ─────────────────────────────────────────────
+  
   function iniciarTimer() {
     if (_timerActivo) return;
     _inyectarCSS();
     _crearWidget();
     _timerActivo = true;
 
-    // Calcular tiempo de fin (reutilizar si hay uno guardado en progreso)
+    
     var finGuardado = null;
     try { finGuardado = localStorage.getItem(SIMULACRO_TIMER_KEY); } catch(e) {}
     var finMs;
     if (finGuardado) {
       finMs = parseInt(finGuardado, 10);
-      // Si ya expiró mientras estaba fuera, finalizar de inmediato
+      
       if (finMs <= Date.now()) {
         localStorage.removeItem(SIMULACRO_TIMER_KEY);
         setTimeout(function() { _finalizarSimulacroForzado(); }, 300);
@@ -4086,10 +4050,10 @@ function _hayProgresoEnStorage(seccionId) {
       try { localStorage.setItem(SIMULACRO_TIMER_KEY, String(finMs)); } catch(e) {}
     }
 
-    // Programar toasts desde el tiempo restante actual
+    
     _programarToasts(finMs - Date.now());
 
-    // Tick cada segundo
+    
     _timerId = setInterval(function() {
       if (!_timerActivo) { clearInterval(_timerId); return; }
       var restantes = finMs - Date.now();
@@ -4101,94 +4065,94 @@ function _hayProgresoEnStorage(seccionId) {
       }
     }, 1000);
 
-    // Mostrar display inicial sin esperar el primer segundo
+    
     _actualizarWidget(finMs - Date.now());
   }
 
-  // ── Detener el timer (al salir del simulacro) ─────────────────────
+  
   function detenerTimer() {
     _timerActivo = false;
     if (_timerId) { clearInterval(_timerId); _timerId = null; }
     _toastTimeouts.forEach(function(id) { clearTimeout(id); });
     _toastTimeouts = [];
     _destruirWidget();
-    // NO borrar SIMULACRO_TIMER_KEY — se necesita para restaurar si vuelve
+    
   }
 
-  // ── Limpiar timer definitivamente (al reiniciar o crear nuevo) ────
+  
   function limpiarTimer() {
     detenerTimer();
     try { localStorage.removeItem(SIMULACRO_TIMER_KEY); } catch(e) {}
   }
 
-  // ── Exponer API pública ───────────────────────────────────────────
+  
   window._simulacroTimer = {
     iniciar: iniciarTimer,
     detener: detenerTimer,
     limpiar: limpiarTimer
   };
 
-  // ── Hooks: conectar con el ciclo de vida del simulacro ────────────
-  // Esperar a DOMContentLoaded y luego interceptar las funciones clave
+  
+  
   function _hookearFunciones() {
-    // 1. Al generar el cuestionario del simulacro → arrancar el timer
+    
     var _origGenerarCuestionario = window.generarCuestionario;
-    // generarCuestionario es una función interna del IIFE — no está expuesta en window.
-    // En su lugar, hookeamos inicializarSimulacroIAR y crearNuevoSimulacroIAR.
+    
+    
 
-    // 2. Iniciar timer cuando se inicializa el simulacro
+    
     var _origInicializar = window.inicializarSimulacroIAR;
     window.inicializarSimulacroIAR = function() {
       if (typeof _origInicializar === 'function') _origInicializar.apply(this, arguments);
-      // Dar un pequeño margen para que el cuestionario se renderice
+      
       setTimeout(function() {
-        // Solo arrancar si la sección simulacro_iar está realmente visible (clase 'activa')
+        
         var simPage = document.getElementById('simulacro_iar');
         if (simPage && simPage.classList.contains('activa')) {
           iniciarTimer();
         }
-        // Si no está activa, no iniciar — el hook de showSection lo hará al entrar
+        
       }, 600);
     };
 
-    // Hookear showSection para detectar entrada/salida del simulacro
+    
     var _origShowSection = window.showSection;
     window.showSection = function(seccionId) {
       if (typeof _origShowSection === 'function') _origShowSection.apply(this, arguments);
       if (seccionId === 'simulacro_iar') {
-        // Pequeño delay para que el render termine antes de mostrar el widget
+        
         setTimeout(iniciarTimer, 700);
       } else {
-        // Salió del simulacro → limpiar timer completamente (resetear contador)
+        
         limpiarTimer();
       }
     };
 
-    // 3. Al salir al menú → limpiar timer SOLO si el usuario confirma la salida.
-    // IMPORTANTE: NO llamar limpiarTimer() antes del diálogo — si el usuario elige
-    // "No, seguir respondiendo", el timer ya habría sido destruido y el reloj desaparecería.
+    
+    
+    
     var _origVolverMenu = window.volverAlMenu;
     window.volverAlMenu = function() {
-      // volverAlMenu llama a confirmarSalidaCuestionario internamente.
-      // Interceptamos el resultado: si el usuario confirma, showSection('menu') o showMenu()
-      // se encargará de limpiar via el hook de showSection (seccionId !== 'simulacro_iar').
-      // Solo necesitamos asegurarnos de no limpiar prematuramente aquí.
+      
+      
+      
+      
       if (typeof _origVolverMenu === 'function') _origVolverMenu.apply(this, arguments);
     };
 
     var _origVolverSubmenu = window.volverAlSubmenu;
     window.volverAlSubmenu = function() {
-      // Mismo razonamiento: no limpiar antes del diálogo de confirmación.
+      
       if (typeof _origVolverSubmenu === 'function') _origVolverSubmenu.apply(this, arguments);
     };
 
-    // 4. Al reiniciar o crear nuevo → limpiar timer completamente y arrancar uno nuevo
+    
     var _origReiniciar = window.reiniciarSimulacroIAR;
     window.reiniciarSimulacroIAR = function() {
       limpiarTimer();
       if (typeof _origReiniciar === 'function') _origReiniciar.apply(this, arguments);
-      // Arrancar nuevo timer después de que el diálogo confirme y el cuestionario se regenere
-      // (el botón Aceptar del diálogo tarda ~400ms en renderizar el cuestionario)
+      
+      
       setTimeout(iniciarTimer, 1000);
     };
 
@@ -4199,7 +4163,7 @@ function _hayProgresoEnStorage(seccionId) {
       setTimeout(iniciarTimer, 1000);
     };
 
-    // 5. Al completar el simulacro manualmente → limpiar timer
+    
     var _origMostrarPuntuacion = window.mostrarPuntuacionTotal;
     if (_origMostrarPuntuacion) {
       window.mostrarPuntuacionTotal = function(seccionId) {
@@ -4207,18 +4171,18 @@ function _hayProgresoEnStorage(seccionId) {
         if (typeof _origMostrarPuntuacion === 'function') _origMostrarPuntuacion.apply(this, arguments);
       };
     }
-    // También hookeamos el evento DOMContentLoaded del mostrarPuntuacionTotal redefinido
+    
     document.addEventListener('sim-timer-hook-puntuacion', function() {
       limpiarTimer();
     });
   }
 
-  // Si hay timer guardado y estamos en el simulacro al cargar, arrancarlo
+  
   document.addEventListener('DOMContentLoaded', function() {
     _hookearFunciones();
 
-    // Parchear mostrarPuntuacionTotal que se define dentro del otro DOMContentLoaded
-    // Usamos un MutationObserver sobre window.mostrarPuntuacionTotal
+    
+    
     var _puntuacionHookInterval = setInterval(function() {
       if (window.mostrarPuntuacionTotal && !window.mostrarPuntuacionTotal._timerHooked) {
         var _orig = window.mostrarPuntuacionTotal;
@@ -4231,13 +4195,13 @@ function _hayProgresoEnStorage(seccionId) {
       }
     }, 200);
 
-    // Si la página carga con hash #simulacro_iar y hay timer guardado → arrancar
+    
     var hash = (window.location.hash || '').replace('#','');
     if (hash === 'simulacro_iar') {
       var finGuardado = null;
       try { finGuardado = localStorage.getItem(SIMULACRO_TIMER_KEY); } catch(e) {}
       if (finGuardado) {
-        // Esperar a que el simulacro esté completamente inicializado
+        
         setTimeout(iniciarTimer, 1200);
       }
     }
