@@ -1,36 +1,27 @@
-/* ============================================================
-   script_onebyone.js  —  Modo Una Pregunta Por Vez
-   
-   CÓMO INTEGRAR:
-   Agregar este script DESPUÉS de script.js en index.html:
-      <script src="script.js"></script>
-      <script src="script_onebyone.js"></script>
-   ============================================================ */
+
 
 (function () {
   'use strict';
 
-  // ── URL base para imágenes (mismo criterio que script.js) ──
   const IMAGENES_BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.hostname.startsWith('192.168.'))
     ? ''
-    : 'https://examenesiar.github.io/';
+    : 'https:
 
   function getImagenUrl(path) {
     if (!path) return '';
-    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    if (path.startsWith('http:
     return IMAGENES_BASE_URL + path;
   }
 
-
-  /* ── Inyectar estilos ── */
+  
   const STYLE_ID = 'iar-onebyone-styles';
   if (!document.getElementById(STYLE_ID)) {
     const style = document.createElement('style');
     style.id = STYLE_ID;
     style.textContent = `
-      @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+      @import url('https:
 
-      /* ── Variables ── */
+      
       .oav-wrapper {
         font-family: 'DM Sans', system-ui, sans-serif;
         max-width: 780px;
@@ -50,7 +41,7 @@
         --oav-shadow:  0 2px 16px rgba(37,99,235,0.07), 0 1px 3px rgba(0,0,0,0.05);
       }
 
-      /* ── Header de progreso ── */
+      
       .oav-header {
         display: flex;
         align-items: center;
@@ -163,7 +154,7 @@
       .oav-status-correct    { background: var(--oav-green-lt); border: 2px solid #34d399; color: var(--oav-green); }
       .oav-status-wrong      { background: var(--oav-red-lt);   border: 2px solid #f87171; color: var(--oav-red); }
 
-      /* ── Card principal ── */
+      
       .oav-card {
         background: #fff;
         border-radius: var(--oav-radius);
@@ -207,7 +198,7 @@
       }
       .oav-question-img:hover { opacity: 0.88; }
 
-      /* ── Opciones ── */
+      
       .oav-options {
         display: flex;
         flex-direction: column;
@@ -299,7 +290,7 @@
       .oav-option.oav-option-correct .oav-option-icon { opacity: 1; color: var(--oav-green); }
       .oav-option.oav-option-wrong    .oav-option-icon { opacity: 1; color: var(--oav-red); }
 
-      /* ── Badge resultado ── */
+      
       .oav-result-badge {
         display: inline-flex;
         align-items: center;
@@ -319,7 +310,7 @@
       .oav-result-correct { background: var(--oav-green-lt); color: var(--oav-green); border: 1.5px solid #a7f3d0; }
       .oav-result-wrong   { background: var(--oav-red-lt);   color: var(--oav-red);   border: 1.5px solid #fecaca; }
 
-      /* ── Footer de la card ── */
+      
       .oav-card-footer {
         padding: 11px 20px 16px;
         border-top: 1px solid var(--oav-border);
@@ -364,7 +355,7 @@
       .oav-btn-ghost:hover:not(:disabled) { background: var(--oav-blue-lt); border-color: var(--oav-blue); }
       .oav-btn-ghost:disabled { opacity: 0.38; cursor: not-allowed; }
 
-      /* ── Explicación ── */
+      
       .oav-explanation {
         padding: 10px 14px;
         border-radius: 8px;
@@ -395,7 +386,7 @@
         border: 1px solid var(--oav-border);
       }
 
-      /* ── Navegación ── */
+      
       .oav-nav {
         display: flex;
         align-items: center;
@@ -441,7 +432,7 @@
         transform: translateY(-1px);
       }
 
-      /* ── Mini-mapa: barra de segmentos horizontal ── */
+      
       .oav-minimap {
         flex: 1;
         display: flex;
@@ -492,7 +483,7 @@
       .oav-dot:hover::after  { opacity: 1; }
       .oav-dot-current::after { opacity: 1; background: var(--oav-blue); }
 
-      /* ── Pantalla resultado final ── */
+      
       .oav-result-screen {
         background: #fff;
         border-radius: var(--oav-radius);
@@ -529,7 +520,7 @@
       }
       .oav-result-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 
-      /* ── Responsive mobile ── */
+      
       @media (max-width: 540px) {
         .oav-card-body    { padding: 14px 14px 11px; }
         .oav-card-footer  { padding: 9px 14px 13px; }
@@ -546,13 +537,10 @@
     document.head.appendChild(style);
   }
 
-  /* ─────────────────────────────────────────────────────────
-     ESTADO
-  ───────────────────────────────────────────────────────── */
+  
   const oavState = {};
   window.oavState = oavState;
 
-  // Marcas temporales de sesión: { [seccionId]: { [qIndex]: [texto1, texto2, ...] } }
   const _sessionMarks = {};
   window._oavSessionMarks = _sessionMarks;
 
@@ -595,9 +583,7 @@
     } catch(e) {}
   }
 
-  /* ─────────────────────────────────────────────────────────
-     HELPERS
-  ───────────────────────────────────────────────────────── */
+  
   function isOAVSection(seccionId) {
     if (!seccionId) return false;
     const esIAR = seccionId.startsWith('iar') || seccionId.toLowerCase().includes('iar');
@@ -704,9 +690,7 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  /* ─────────────────────────────────────────────────────────
-     RENDER PRINCIPAL
-  ───────────────────────────────────────────────────────── */
+  
   function renderOAV(seccionId) {
     const preguntas = window.preguntasPorSeccion && window.preguntasPorSeccion[seccionId];
     if (!preguntas || preguntas.length === 0) return;
@@ -981,9 +965,7 @@
     }
   }
 
-  /* ─────────────────────────────────────────────────────────
-     PERSISTENCIA LOCAL
-  ───────────────────────────────────────────────────────── */
+  
   function _persistAnswers(seccionId, qIndex) {
     try {
       const inputs = Array.from(document.getElementsByName('pregunta' + seccionId + qIndex));
@@ -998,9 +980,7 @@
     } catch (e) {}
   }
 
-  /* ─────────────────────────────────────────────────────────
-     ACCIONES GLOBALES
-  ───────────────────────────────────────────────────────── */
+  
   window._oavGoTo = function (seccionId, idx) {
     const st = oavState[seccionId];
     if (!st) return;
@@ -1159,9 +1139,7 @@
     }
   };
 
-  /* ─────────────────────────────────────────────────────────
-     PANTALLA DE RESULTADO FINAL
-  ───────────────────────────────────────────────────────── */
+  
   function _mostrarResultadoFinalOAV(seccionId) {
     const preguntas  = window.preguntasPorSeccion[seccionId] || [];
     const total      = preguntas.length;
@@ -1178,7 +1156,6 @@
       if (all[seccionId]) { all[seccionId].totalShown = true; localStorage.setItem('quiz_state_v3', JSON.stringify(all)); }
     } catch(e) {}
 
-// Registrar intento usando oav-wrapper como guardia cuando resultado-total no existe
     const resultNode = document.getElementById('resultado-total-' + seccionId);
     const wrapperNode = document.getElementById('oav-wrapper-' + seccionId);
     const guardaNode = resultNode || wrapperNode;
@@ -1309,9 +1286,7 @@
     ]);
   }
 
-  /* ─────────────────────────────────────────────────────────
-     INTEGRACIÓN CON script.js
-  ───────────────────────────────────────────────────────── */
+  
   window._oavRenderOAV = renderOAV;
   window._oavState     = oavState;
 
@@ -1398,9 +1373,7 @@
 
   console.log('[OAV] ✅ Modo una-pregunta-por-vez listo.');
 
-  /* ================================================================
-     SISTEMA DE COMENTARIOS POR PREGUNTA — v2 CON MODERACIÓN MEJORADA
-  ================================================================ */
+  
 
   (function _inyectarEstilosComentarios() {
     const STYLE_ID = 'iar-comentarios-styles';
@@ -1538,22 +1511,19 @@
     document.head.appendChild(s);
   })();
 
-  // ============================================================
-  // FUNCIÓN DE NORMALIZACIÓN MEJORADA (LEET SPEAK + SÍMBOLOS)
-  // ============================================================
   function _comNorm(t) {
     if (!t) return '';
     
-    // Paso 1: minúsculas
+
     let result = t.toLowerCase();
     
-    // Paso 2: reemplazar números y símbolos por letras (leet speak)
+
     const leetMap = {
         '0': 'o', '1': 'i', '2': 'z', '3': 'e', '4': 'a',
         '5': 's', '6': 'b', '7': 't', '8': 'b', '9': 'g',
         '@': 'a', '$': 's', '+': 't', '&': 'y',
         '#': 'h', '%': 'o', '^': 'v',
-        // Puntuación y separadores → espacio (no confundir con leet)
+
         '!': ' ', '?': ' ', '.': ' ', ',': ' ', ';': ' ', ':': ' ',
         '*': ' ', '-': ' ', '_': ' ', '=': ' ', '<': ' ', '>': ' ',
         '/': ' ', '\\': ' ', '|': ' ', '(': ' ', ')': ' ',
@@ -1561,64 +1531,58 @@
     };
     result = result.split('').map(c => leetMap[c] !== undefined ? leetMap[c] : c).join('');
     
-    // Paso 3: eliminar tildes
+
     result = result.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     
-    // Paso 4: eliminar caracteres especiales restantes
+
     result = result.replace(/[^a-z\s]/g, ' ');
     
-    // Paso 5: colapsar letras repetidas (ej: "culooo" → "culo", "boluuddo" → "boludo")
+
     result = result.replace(/(.)\1{2,}/g, '$1$1');
     
-    // Paso 6: espacios múltiples a uno solo y trim
+
     result = result.replace(/\s+/g, ' ').trim();
     
     return result;
   }
 
-  // ============================================================
-  // LISTA DE PALABRAS PROHIBIDAS (SOLO BASE, SIN VARIANTES)
-  // ============================================================
   const _COM_PROHIBIDAS = [
-    // INSULTOS DIRECTOS
+
     'pelotudo', 'boludo', 'forro', 'hijodeputa', 'puta', 'puto','estupido','es tupido','Estupido',
     'choto', 'zorra', 'gil', 'tarado', 'mogolico', 'trolo',
     'marica', 'maricon', 'sorete', 'cagon', 'mierda', 'lacra',
     'escoria', 'basura', 'rata', 'chancho', 'cerdo', 'perro', 'buitre', 'alimaña',
     
-    // PARTES DEL CUERPO (en contexto ofensivo - NO MÉDICO)
+
     'culo', 'culito', 'culos','orto', 'concha', 'verga', 'pija', 'pito', 'pichula', 'teta', 'nalga',
     
-    // COMBINACIONES OFENSIVAS
+
     'hijodeputa', 'hijaputa', 'hijueputa', 'conchadesumadre', 'conchatumadre', 'putamadre', 'reputamadre', 'reconcha',
     'chupapija', 'chupapito', 'chupala','rompebolas', 'rompepelotas', 'soplapija', 'comepija', 'comemierda',
     'cagartepalos', 'cagarapalos',
     
-    // INSULTOS RACISTAS / XENOFÓBICOS
+
     'sudaca', 'sudaka', 'bolita', 'paragua', 'boliguayo',     'chilote', 'brasuca', 'negrodemierda', 'negrada',
     
-    // DISCAPACIDAD COMO INSULTO
+
     'mongolico', 'retrasado', 'retardado', 'discapacitado', 'tonto', 'lelo', 'autista',
     
-    // INSULTOS POR ORIENTACIÓN SEXUAL
+
     'puto', 'maricon', 'maricón','trolo', 'travesti', 'tortillera', 'bollera',
     
-    // INSULTOS POR CONDICIÓN SOCIAL
+
     'villero', 'planero', 'choriplanero', 'grasa', 'croto',
     
-    // SPAM / URLs
+
     'http', 'https', 'www', 'clickaqui', 'clickaca', 'ganadinero', 'ganaplata','whatsapp', 'telegram', 'discord', 'instagram', 'facebook', 'twitter',
     'tiktok', 'inversiones', 'trading', 'cripto', 'bitcoin', 'prestamo', 'credito',
     
-    // OFENSAS VARIAS
+
     'inservible', 'inutil', 'inepto', 'fracasado', 'mamerto',
     'chupamedias', 'lamebotas', 'vendepatria', 'traidor', 'mentiroso',
     'estafador', 'chorro', 'ratero', 'vago', 'parasito', 'apestoso',
   ];
 
-  // ============================================================
-  // FRASES PROHIBIDAS COMPLETAS
-  // ============================================================
   const _COM_FRASES_PROHIBIDAS = [
     'te voy a matar', 'te mato', 'te pego', 'te voy a cagar', 'cagar a palos',
     'anda a la mierda', 'andate a la mierda', 'la concha de tu madre',
@@ -1627,33 +1591,30 @@
     'sopla pija', 'come pija', 'cagarte a palos', 'cagar a palos',
   ];
 
-  // ============================================================
-  // FUNCIÓN DE MODERACIÓN MEJORADA
-  // ============================================================
   function _comModerar(texto) {
     if (!texto || !texto.trim()) return 'El comentario no puede estar vacío.';
     const t = texto.trim();
     if (t.length < 5) return 'El comentario es demasiado corto (mínimo 5 caracteres).';
     if (t.length > 800) return 'El comentario es demasiado largo (máximo 800 caracteres).';
     
-    // Normalizar el texto completo
+
     const norm = _comNorm(t);
     
-    // Verificar cada palabra prohibida
+
     for (const palabra of _COM_PROHIBIDAS) {
         const pn = _comNorm(palabra);
         
-        // Buscar como palabra completa (con límites de palabra)
+
         const reEscaped = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const re = new RegExp('(?:^|\\s)' + reEscaped + '(?:\\s|$)', 'i');
-        // También buscar sin límites para detectar variantes pegadas (culito, pijazo, etc.)
+
         const rePartial = new RegExp(reEscaped, 'i');
         if (re.test(norm) || rePartial.test(norm)) {
             return '⚠️ Tu comentario contiene lenguaje inapropiado o enlaces no permitidos. Revisalo antes de publicar.';
         }
     }
     
-    // Verificar frases completas
+
     for (const frase of _COM_FRASES_PROHIBIDAS) {
         const fn = _comNorm(frase);
         if (norm.includes(fn)) {
@@ -1661,7 +1622,7 @@
         }
     }
     
-    // Verificar spam de mayúsculas
+
     const soloLetras = t.replace(/[^a-zA-Z]/g, '');
     if (soloLetras.length > 10 && soloLetras.replace(/[^A-Z]/g, '').length / soloLetras.length > 0.7) {
         return '⚠️ Por favor evitá escribir todo en MAYÚSCULAS.';
@@ -1700,7 +1661,7 @@
 
   async function _comLeerPausa() {
     try {
-      const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+      const { doc, getDoc } = await import('https:
       const db = window._firestoreDB_comentarios;
       if (!db) return {};
       const snap = await getDoc(doc(db, 'config', 'comentarios_pausa'));
@@ -1712,7 +1673,7 @@
   }
 
   async function _comEscribirPausa(campos) {
-    const { doc, setDoc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const { doc, setDoc, getDoc } = await import('https:
     const db = window._firestoreDB_comentarios;
     if (!db) throw new Error('sin db');
     const ref = doc(db, 'config', 'comentarios_pausa');
@@ -1886,7 +1847,7 @@
   async function _comBorrarTodos(clave, cont) {
     try {
       const { collection, getDocs, doc, deleteDoc, writeBatch } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        await import('https:
       const db = window._firestoreDB_comentarios;
       if (!db) throw new Error('sin db');
       const snap = await getDocs(collection(db, 'comentarios', clave, 'mensajes'));
@@ -1914,7 +1875,7 @@
 
     try {
       const { collection, query, orderBy, limit, getDocs } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        await import('https:
 
       const db = window._firestoreDB_comentarios;
       if (!db) throw new Error('sin db');
@@ -1987,8 +1948,6 @@
     err.style.display = 'none';
     ok.style.display  = 'none';
 
-    // APLICAR MODERACIÓN (incluso para admin, pero admin puede saltarla si se desea)
-    // En este código, el admin también está sujeto a moderación.
     const errorMod = _comModerar(texto);
     if (errorMod) {
       err.textContent = errorMod;
@@ -2002,7 +1961,7 @@
 
     try {
       const { collection, addDoc, serverTimestamp } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        await import('https:
 
       const db   = window._firestoreDB_comentarios;
       const user = window._authCurrentUser;
@@ -2043,7 +2002,7 @@
     divEl.style.pointerEvents = 'none';
     try {
       const { doc, deleteDoc } =
-        await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        await import('https:
       const db = window._firestoreDB_comentarios;
       if (!db) throw new Error('sin db');
       await deleteDoc(doc(db, 'comentarios', clave, 'mensajes', docId));
