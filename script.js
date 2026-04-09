@@ -175,6 +175,8 @@ function getImagenUrl(path) {
       console.warn('[IAR Sync] ⚠️ Error guardando completados en Firestore:', err.code || err.message);
     }
   }
+  // Exponer globalmente para que index.html (checkmarks del submenú IAR) pueda llamarla
+  window._guardarCompletadosFirestore = _guardarCompletadosFirestore;
 
   // ---- Sincronizar TODO desde Firestore al iniciar sesión ----
   // Se llama desde firebase-auth.js después de autenticar
@@ -193,12 +195,14 @@ function getImagenUrl(path) {
     _firestoreUID = uid;
     _sincronizandoDesdeFS = true; // suprimir re-escritura en Firestore durante la carga
 
-    // CRÍTICO: limpiar historial local ANTES de cargar el de Firestore.
-    // Sin esto, un usuario nuevo ve el historial del usuario anterior
-    // que quedó en localStorage del mismo navegador.
+    // CRÍTICO: limpiar estado local ANTES de cargar desde Firestore.
+    // Sin esto, un usuario nuevo hereda el progreso (preguntas respondidas) y los
+    // checkmarks del usuario anterior que quedaron en localStorage del mismo dispositivo.
+    state = {};
+    localStorage.removeItem(STORAGE_KEY);
     attemptLog = [];
     localStorage.removeItem(ATTEMPT_LOG_KEY);
-    console.log('[IAR Sync] 🧹 Historial local limpiado antes de cargar desde Firestore (uid:', uid, ')');
+    console.log('[IAR Sync] 🧹 Estado local limpiado antes de cargar desde Firestore (uid:', uid, ')');
 
     try {
       const { doc, getDoc, collection, getDocs } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
@@ -318,39 +322,23 @@ function getImagenUrl(path) {
         console.warn('[IAR Sync] No se pudo cargar historial desde Firestore:', e.code || e.message);
       }
 
-      // --- 3. Cargar completados (Firestore es la fuente de verdad, fusionar con local) ---
+      // --- 3. Cargar completados (Firestore es la ÚNICA fuente de verdad) ---
+      // CRÍTICO: NO fusionar con datos locales del dispositivo — pueden pertenecer a otro usuario.
+      // Se usa el UID de Firebase como clave de caché para aislar usuarios en el mismo dispositivo.
       try {
         const compRef = doc(_firestoreDB, 'progreso', uid, 'datos', 'completados');
         const compSnap = await getDoc(compRef);
-        const USER_KEY = 'iar_user_id_v1';
-        const COMPLETED_KEY_PREFIX = 'iar_completed_v1_';
-        const localUid = localStorage.getItem(USER_KEY);
+        const COMPLETED_KEY_FS = 'iar_completed_v1_fs_' + uid;
 
         if (compSnap.exists() && compSnap.data().completados) {
+          // Firestore tiene datos → sobrescribir caché local limpiamente (sin fusionar)
           const fsCompleted = compSnap.data().completados;
-          if (localUid) {
-            const completedKey = COMPLETED_KEY_PREFIX + localUid;
-            let localCompleted = {};
-            try { localCompleted = JSON.parse(localStorage.getItem(completedKey) || '{}'); } catch(e2) {}
-            // Fusión: Firestore tiene prioridad, se agregan los locales que no estén en FS
-            const merged = { ...localCompleted, ...fsCompleted };
-            localStorage.setItem(completedKey, JSON.stringify(merged));
-            // Si local tenía algo que FS no tiene, subir la fusión a Firestore
-            const localTieneExtra = Object.keys(localCompleted).some(k => !fsCompleted[k]);
-            if (localTieneExtra) {
-              _guardarCompletadosFirestore(merged);
-            }
-          }
-          console.log('[IAR Sync] ✅ Completados cargados desde Firestore');
-        } else if (localUid) {
-          // Firestore no tiene completados → subir los locales si existen
-          const completedKey = COMPLETED_KEY_PREFIX + localUid;
-          let localCompleted = {};
-          try { localCompleted = JSON.parse(localStorage.getItem(completedKey) || '{}'); } catch(e2) {}
-          if (Object.keys(localCompleted).length > 0) {
-            console.log('[IAR Sync] ⬆️ Subiendo completados locales a Firestore');
-            _guardarCompletadosFirestore(localCompleted);
-          }
+          localStorage.setItem(COMPLETED_KEY_FS, JSON.stringify(fsCompleted));
+          console.log('[IAR Sync] ✅ Completados cargados desde Firestore:', Object.keys(fsCompleted).length, 'ítems');
+        } else {
+          // Usuario sin completados en Firestore → empezar vacío
+          localStorage.setItem(COMPLETED_KEY_FS, JSON.stringify({}));
+          console.log('[IAR Sync] ℹ️ Sin completados en Firestore para este usuario — iniciando vacío');
         }
         // Actualizar UI de checkmarks
         if (typeof renderNavBar === 'function') renderNavBar();
@@ -369,11 +357,9 @@ function getImagenUrl(path) {
   // ---- Actualizar checkmarks en el menú ----
   function _actualizarCheckmarksMenu() {
     try {
-      const USER_KEY = 'iar_user_id_v1';
-      const COMPLETED_KEY_PREFIX = 'iar_completed_v1_';
-      const uid = localStorage.getItem(USER_KEY);
+      const uid = window._firebaseUID;
       if (!uid) return;
-      const completedKey = COMPLETED_KEY_PREFIX + uid;
+      const completedKey = 'iar_completed_v1_fs_' + uid;
       const completed = JSON.parse(localStorage.getItem(completedKey) || '{}');
       document.querySelectorAll('li[onclick]').forEach(function(li) {
         const m = li.getAttribute('onclick').match(/mostrarCuestionario\('([^']+)'\)/);
@@ -387,6 +373,8 @@ function getImagenUrl(path) {
           }
         }
       });
+      // También refrescar los checkboxes del submenú IAR (renderizados por index.html)
+      if (typeof window._refreshIarCheckmarks === 'function') window._refreshIarCheckmarks();
     } catch(e) {}
   }
 
@@ -668,6 +656,9 @@ function getImagenUrl(path) {
     document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
     document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
 
+    // Notificar al chat que salimos del menú (ocultar botón 💬)
+    if (typeof window.chatMostrarEnMenu === 'function') window.chatMostrarEnMenu(false);
+
     navBarModo = 'normal';
     renderNavBar();
 
@@ -789,6 +780,8 @@ function getImagenUrl(path) {
       if (_stSim) _stSim.style.display = 'none';
       document.getElementById("menu-principal")?.classList.remove("oculto");
       restoreScrollPosition();
+      // Notificar al chat que estamos en el menú (mostrar botón 💬)
+      if (typeof window.chatMostrarEnMenu === 'function') window.chatMostrarEnMenu(true);
       return;
     }
     
@@ -842,6 +835,9 @@ function getImagenUrl(path) {
     if (window.location.hash !== '#menu') {
       history.replaceState({ section: null }, 'Menú Principal', '#menu');
     }
+
+    // Notificar al chat que estamos en el menú (mostrar botón 💬)
+    if (typeof window.chatMostrarEnMenu === 'function') window.chatMostrarEnMenu(true);
 
     restoreScrollPosition();
   }
@@ -1553,12 +1549,10 @@ function getImagenUrl(path) {
 
     // ======= AUTO-CHECKMARK: marcar el ☑ en el submenú al completar =======
     (function autoMarcarCompletado(sid) {
-      var USER_KEY = 'iar_user_id_v1';
-      var COMPLETED_KEY_PREFIX = 'iar_completed_v1_';
       try {
-        var uid = localStorage.getItem(USER_KEY);
+        var uid = window._firebaseUID;
         if (!uid) return;
-        var completedKey = COMPLETED_KEY_PREFIX + uid;
+        var completedKey = 'iar_completed_v1_fs_' + uid;
         var completed = {};
         try { completed = JSON.parse(localStorage.getItem(completedKey) || '{}'); } catch(e) {}
         if (!completed[sid]) {
@@ -2172,12 +2166,10 @@ function getImagenUrl(path) {
   ];
 
   function getCompletedSections() {
-    var USER_KEY = 'iar_user_id_v1';
-    var COMPLETED_KEY_PREFIX = 'iar_completed_v1_';
     try {
-      var uid = localStorage.getItem(USER_KEY);
+      var uid = window._firebaseUID;
       if (!uid) return {};
-      var completedKey = COMPLETED_KEY_PREFIX + uid;
+      var completedKey = 'iar_completed_v1_fs_' + uid;
       return JSON.parse(localStorage.getItem(completedKey) || '{}');
     } catch(e) { return {}; }
   }
@@ -2598,8 +2590,13 @@ function getImagenUrl(path) {
       } catch(e) {}
     });
 
-  const hash = window.location.hash.substring(1);
-  // Lista de todas las secciones válidas (aunque preguntasPorSeccion esté vacío por Firestore)
+  // ── Navegación inicial: esperar a que Firebase confirme la sesión ──────────
+  // firebase-auth.js llama window._onFirebaseSessionReady(irAMenu) cuando está listo.
+  //   irAMenu=true  → login manual → siempre mostrar menú principal
+  //   irAMenu=false → recarga → restaurar el hash actual (sección, submenú, etc.)
+  // Si Firebase ya estaba listo antes de este punto (poco probable pero posible),
+  // el flag window._firebaseSessionReady lo indica.
+
   const SECCIONES_VALIDAS = [
     'iarsep2020','iaroct2020','iarnov2020','iardic2020',
     'iarfeb2021','iarmar2021','iarabr2021','iarmay2021','iarjun2021','iarago2021','iarsep2021','iarnov2021','iardic2021',
@@ -2609,32 +2606,51 @@ function getImagenUrl(path) {
     'iarfeb2025','iarmar2025','iarabr2025','iarjun2025','iarsep2025','iaroct2025','iarnov2025','iardic2025',
     'iarfeb2026','simulacro_iar'
   ];
-  if (hash && hash !== 'menu' && SECCIONES_VALIDAS.includes(hash)) {
-    showSection(hash);
-    currentSection = hash;
-  } else if (hash === 'respuestas') {
-    if (window._esAdmin) { mostrarRespuestasCorrectas(); } else { history.replaceState({ section: null }, 'Menú Principal', '#menu'); showMenu(); }
-  } else if (hash && hash.startsWith('respuestas-')) {
-    const secId = hash.replace('respuestas-', '');
-    if (window._esAdmin) { mostrarRespuestasExamen(secId); } else { history.replaceState({ section: null }, 'Menú Principal', '#menu'); showMenu(); }
-  } else if (hash && document.getElementById(hash)) {
-    // ← NUEVO: el hash corresponde a un submenú (ej: 'iar-submenu', 'otro-submenu')
-    // Restaurar el submenú sin ir al menú principal
-    const submenuEl = document.getElementById(hash);
-    const esSubmenu = submenuEl && (submenuEl.classList.contains('menu-principal') || submenuEl.id.endsWith('-submenu'));
-    if (esSubmenu) {
-      document.getElementById("menu-principal")?.classList.add("oculto");
-      document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
-      document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
-      submenuEl.style.display = "block";
-      history.replaceState({ submenu: hash }, hash, `#${hash}`);
+
+  function _navegarSegunHash() {
+    const hash = window.location.hash.substring(1);
+    if (hash && hash !== 'menu' && SECCIONES_VALIDAS.includes(hash)) {
+      showSection(hash);
+      currentSection = hash;
+    } else if (hash === 'respuestas') {
+      if (window._esAdmin) { mostrarRespuestasCorrectas(); } else { history.replaceState({ section: null }, 'Menú Principal', '#menu'); showMenu(); }
+    } else if (hash && hash.startsWith('respuestas-')) {
+      const secId = hash.replace('respuestas-', '');
+      if (window._esAdmin) { mostrarRespuestasExamen(secId); } else { history.replaceState({ section: null }, 'Menú Principal', '#menu'); showMenu(); }
+    } else if (hash && document.getElementById(hash)) {
+      const submenuEl = document.getElementById(hash);
+      const esSubmenu = submenuEl && (submenuEl.classList.contains('menu-principal') || submenuEl.id.endsWith('-submenu'));
+      if (esSubmenu) {
+        document.getElementById("menu-principal")?.classList.add("oculto");
+        document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
+        document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
+        submenuEl.style.display = "block";
+        history.replaceState({ submenu: hash }, hash, `#${hash}`);
+      } else {
+        history.replaceState({ section: null }, 'Menú Principal', '#menu');
+        showMenu();
+      }
     } else {
       history.replaceState({ section: null }, 'Menú Principal', '#menu');
       showMenu();
     }
-  } else {
-    history.replaceState({ section: null }, 'Menú Principal', '#menu');
-    showMenu();
+  }
+
+  // Callback que dispara firebase-auth.js al confirmar la sesión
+  window._onFirebaseSessionReady = function(irAMenu) {
+    if (irAMenu) {
+      // Login manual → menú siempre (firebase-auth.js ya maneja la navegación visual,
+      // pero aseguramos que currentSection quede en null)
+      currentSection = null;
+    } else {
+      // Recarga con sesión vigente → restaurar la página que el usuario tenía abierta
+      _navegarSegunHash();
+    }
+  };
+
+  // Por si firebase-auth.js ya disparó el callback antes de este DOMContentLoaded
+  if (window._firebaseSessionReady) {
+    _navegarSegunHash();
   }
   });
 
@@ -2657,33 +2673,8 @@ function getImagenUrl(path) {
       }
   });
 
-  // Detección de DevTools: usa diferencia outer/inner SOLO cuando el zoom del navegador
-  // es 100% (devicePixelRatio igual al valor base). El zoom cambia devicePixelRatio,
-  // por eso lo usamos para filtrar falsos positivos.
-  let devtools = {open: false};
-  let _basePixelRatio = window.devicePixelRatio || 1;
-  setInterval(function() {
-      let currentRatio = window.devicePixelRatio || 1;
-      // Si el ratio cambió respecto al inicio, el usuario hizo zoom → ignorar
-      if (Math.abs(currentRatio - _basePixelRatio) > 0.05) {
-          _basePixelRatio = currentRatio; // actualizar base ante nuevo nivel de zoom
-          devtools.open = false;
-          return;
-      }
-      // Sin zoom: diferencia grande entre outer e inner indica DevTools acoplado
-      let widthDiff  = window.outerWidth  - window.innerWidth;
-      let heightDiff = window.outerHeight - window.innerHeight;
-      // Umbral generoso (300px) para evitar falsos positivos en pantallas pequeñas
-      if (widthDiff > 300 || heightDiff > 300) {
-          if (!devtools.open) {
-              devtools.open = true;
-              alert('Por favor, cierre las herramientas de desarrollo para continuar.');
-              window.location.reload();
-          }
-      } else {
-          devtools.open = false;
-      }
-  }, 500);
+  // Detección de DevTools por outer/inner eliminada: genera falsos positivos
+  // con cualquier nivel de zoom del navegador mayor a ~150%.
 
   document.addEventListener('dragstart', function(e) {
       e.preventDefault();
