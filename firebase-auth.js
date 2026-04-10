@@ -1,12 +1,18 @@
+/* ========== firebase-auth.js ==========
+   Sistema de autenticación con Firebase
+   - Login con email y contraseña
+   - Sesión única por dispositivo
+   - Sistema de licencias con verificación
+   - Barra inferior estática con info de sesión
+*/
 
-
-import { initializeApp } from "https:
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged, sendPasswordResetEmail }
-  from "https:
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, deleteDoc, serverTimestamp, collection, addDoc, Timestamp, increment, updateDoc, onSnapshot, query, where }
-  from "https:
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getDatabase, ref, set, onValue, onDisconnect, push, query as rtQuery, limitToLast, orderByChild, serverTimestamp as rtServerTimestamp, remove }
-  from "https:
+  from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyB9aDHVHhgMGlhXmsiLfiVZcSzUs3994ws",
@@ -16,7 +22,7 @@ const firebaseConfig = {
   messagingSenderId: "967562801862",
   appId: "1:967562801862:web:61f618fe7a2ff51dd15dc7",
   measurementId: "G-CFRNQ9Z3SQ",
-  databaseURL: "https:
+  databaseURL: "https://examenesiaruba-d11fb-default-rtdb.firebaseio.com"
 };
 
 const app = initializeApp(firebaseConfig);
@@ -24,6 +30,10 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const rtdb = getDatabase(app);
 
+// ── BLOQUEO INMEDIATO DE PANTALLA ───────────────────────────────────────────
+// Cubre la pantalla con un overlay opaco mientras Firebase inicializa.
+// Garantiza que el usuario nunca vea el contenido sin haber pasado por el login.
+// Se remueve en mostrarLogin(), mostrarPantallaBienvenida() o mostrarLicenciaVencida().
 (function() {
   function _insertarBloq() {
     if (document.getElementById('auth-bloq-inicial')) return;
@@ -47,26 +57,36 @@ const rtdb = getDatabase(app);
 const ADMIN_EMAIL = "admin.14r@gmail.com";
 const CONTACTO_EMAIL = "examenesiar@gmail.com";
 
+// ======== DEMO ========
 const DEMO_SECCIONES_PERMITIDAS = ["iarsep2020", "iaroct2020", "iarnov2020", "iardic2020"];
 const DEMO_DIAS = 3;
 window._demoCheckEnabled = false;
 window._demoSeccionesPermitidas = DEMO_SECCIONES_PERMITIDAS;
-window._licenciaYaVerificada = false;
+window._licenciaYaVerificada = false;  // true cuando la verificación terminó (demo o no)
 
+// Promesa que se resuelve cuando la licencia fue verificada.
+// script.js la usa para bloquear el simulacro hasta saber si el usuario es demo o no.
 let _resolveLicenciaVerificada;
 window._licenciaVerificada = new Promise(function(resolve) {
   _resolveLicenciaVerificada = resolve;
 });
 
+// Licencia en memoria (se llena al autenticar)
 let licenciaActual = null;
 
+// Bandera en memoria (no persiste en recargas): true SOLO cuando el usuario
+// presionó "INGRESAR AL SISTEMA" o "Crear cuenta DEMO gratis".
+// Si la página se recarga (F5/Ctrl+R), esta variable vuelve a false y
+// onAuthStateChanged mostrará el login en lugar de entrar directo al menú.
 let _sesionIniciadaManualmente = false;
 
+// Listener en tiempo real de solicitudes pendientes
 let _solicitudesUnsubscribe = null;
-let _ultimoSnapshotSolicitudes = null;
+let _ultimoSnapshotSolicitudes = null; // guarda el último snapshot para renderizar al abrir el panel
 
 function getDeviceId() {
-
+  // sessionStorage es único por pestaña/ventana — incluso en el mismo navegador.
+  // Esto permite detectar múltiples ventanas del mismo navegador como sesiones distintas.
   let did = sessionStorage.getItem("iar_session_id");
   if (!did) {
     did = "ses_" + Date.now().toString(36) + "_" + Math.random().toString(36).substr(2, 9);
@@ -81,12 +101,14 @@ async function verificarLicencia(userId) {
     const licSnap = await getDoc(licRef);
 
     if (!licSnap.exists()) {
-
+      // ── RECUPERACIÓN AUTOMÁTICA ──
+      // El usuario existe en Firebase Auth pero no tiene licencia en Firestore.
+      // Esto pasa cuando el setDoc falló al registrarse. Auto-crear licencia demo.
       try {
         const user = auth.currentUser;
         if (user && user.uid === userId) {
           const ahora = Timestamp.now();
-
+          // Usar la fecha de creación de la cuenta como base del período demo
           const creadoEn = user.metadata?.creationTime
             ? Timestamp.fromDate(new Date(user.metadata.creationTime))
             : ahora;
@@ -99,7 +121,7 @@ async function verificarLicencia(userId) {
             recuperadaAutomaticamente: true
           });
           console.log('[IAR] Licencia demo recuperada automáticamente para', user.email);
-
+          // Verificar nuevamente con la licencia recién creada
           const licSnapNuevo = await getDoc(licRef);
           if (licSnapNuevo.exists()) {
             const data = licSnapNuevo.data();
@@ -123,6 +145,7 @@ async function verificarLicencia(userId) {
 
     const data = licSnap.data();
 
+    // ── Licencia DEMO ──
     if (data.esDemo === true) {
       if (!data.creadoEn) return { valida: false, esDemo: true, mensaje: "Error en la licencia demo. Contactanos." };
       const creadoEn = data.creadoEn.toDate ? data.creadoEn.toDate() : new Date(data.creadoEn);
@@ -162,12 +185,13 @@ async function verificarLicencia(userId) {
   }
 }
 
+// ======== ESTILOS ========
 function inyectarEstilos() {
   if (document.getElementById("login-styles")) return;
   const style = document.createElement("style");
   style.id = "login-styles";
   style.textContent = `
-    
+    /* ── Login overlay ── */
     #login-overlay {
       position:fixed;top:0;left:0;width:100%;height:100%;
       background:linear-gradient(135deg,#1a56a0 0%,#1e3a8a 100%);
@@ -224,9 +248,9 @@ function inyectarEstilos() {
       content:'';flex:1;height:1px;background:#e2e8f0;
     }
 
-    
+    /* ── Barra inferior estática — estilos en styles.css ── */
 
-    
+    /* ── Tabs login/registro ── */
     .login-tabs { display:flex;gap:0;margin-bottom:14px;border-radius:10px;overflow:hidden;border:1.5px solid #e2e8f0; }
     .login-tab { flex:1;padding:8px;background:#f8fafc;color:#64748b;font-size:.82rem;font-weight:600;cursor:pointer;border:none;transition:all .15s; }
     .login-tab.activo { background:#0d7490;color:#fff; }
@@ -235,7 +259,7 @@ function inyectarEstilos() {
     .demo-banner-titulo { font-size:.9rem;font-weight:800;color:#065f46;margin-bottom:4px; }
     .demo-banner-desc { font-size:.82rem;color:#047857;line-height:1.5; }
 
-    
+    /* ── Modal restricción demo ── */
     #demo-restriccion-overlay {
       position:fixed;top:0;left:0;width:100%;height:100%;
       background:rgba(0,0,0,.6);z-index:9999;
@@ -253,7 +277,7 @@ function inyectarEstilos() {
     .demo-plan-nombre { color:#334155;font-weight:600; }
     .demo-plan-precio { color:#0d7490;font-weight:700; }
 
-    
+    /* ── Cuenta regresiva en barra ── */
     #barra-countdown {
       display:inline-flex;align-items:center;gap:5px;
       background:#dc2626;color:#fff;border-radius:6px;padding:3px 10px;
@@ -262,7 +286,7 @@ function inyectarEstilos() {
     }
     @keyframes pulseRed { 0%,100%{opacity:1}50%{opacity:.75} }
 
-    
+    /* ── Licencia vencida ── */
     #licencia-vencida-overlay {
       position:fixed;top:0;left:0;width:100%;height:100%;
       background:linear-gradient(135deg,#1a56a0 0%,#1e3a8a 100%);
@@ -299,7 +323,7 @@ function inyectarEstilos() {
     .lv-plan-card:hover { box-shadow:0 2px 8px rgba(0,0,0,.12);transform:translateY(-1px); }
     .demo-plan-sel-card:hover { box-shadow:0 2px 8px rgba(0,0,0,.12);transform:translateY(-1px); }
 
-    
+    /* ── Badge solicitudes en botón Admin ── */
     #btn-abrir-admin {
       position:relative;
     }
@@ -318,7 +342,7 @@ function inyectarEstilos() {
       50%{transform:scale(1.15);}
     }
 
-    
+    /* ── Panel Admin ── */
     #admin-overlay {
       position:fixed;top:0;left:0;width:100%;height:100%;
       background:rgba(0,0,0,.6);z-index:99998;
@@ -376,7 +400,7 @@ function inyectarEstilos() {
     .admin-msg.ok { background:#d1fae5;color:#065f46;display:block; }
     .admin-msg.err { background:#fee2e2;color:#dc2626;display:block; }
 
-    
+    /* ── Solicitud de acceso ── */
     #solicitud-overlay {
       position:fixed;top:0;left:0;width:100%;height:100%;
       background:linear-gradient(135deg,#1a56a0 0%,#1e3a8a 100%);
@@ -394,15 +418,18 @@ function inyectarEstilos() {
   document.head.appendChild(style);
 }
 
+// ======== LOGIN / REGISTRO ========
 let pantallaActual = "login";
 
 function mostrarLogin(mensajeError) {
   inyectarEstilos();
   document.body.style.overflow = "hidden";
 
+  // Remover el overlay de bloqueo inicial (spinner de carga)
   const bloqInicial = document.getElementById('auth-bloq-inicial');
   if (bloqInicial) bloqInicial.remove();
 
+  // Ocultar el contenido de la app para que no se vea detrás del login
   const menuPrincipal = document.getElementById('menu-principal');
   if (menuPrincipal) { menuPrincipal.style.display = 'none'; menuPrincipal.classList.add('oculto'); }
   document.querySelectorAll('.pagina-cuestionario').forEach(function(p) { p.classList.remove('activa'); });
@@ -483,6 +510,7 @@ function mostrarLogin(mensajeError) {
     document.getElementById("login-password").addEventListener("keydown", e => { if (e.key === "Enter") handleLogin(); });
     document.getElementById("login-email").addEventListener("keydown", e => { if (e.key === "Enter") document.getElementById("login-password").focus(); });
 
+    // ── Recuperación de contraseña ──
     document.getElementById("btn-olvide-password").addEventListener("click", () => {
       const formRecuperar = document.getElementById("form-recuperar");
       const emailVal = document.getElementById("login-email").value.trim();
@@ -522,11 +550,12 @@ function mostrarLogin(mensajeError) {
   const loading = document.getElementById("login-loading");
   if (loading) loading.textContent = "";
 
+  // Limpiar campos de email y contraseña al mostrar el login
   const emailField = document.getElementById("login-email");
   const passField = document.getElementById("login-password");
   if (emailField) { emailField.value = ""; }
   if (passField) { passField.value = ""; }
-
+  // Restaurar visibilidad de contraseña si estaba en texto plano
   if (passField && passField.type === "text") {
     passField.type = "password";
     const toggleBtn = document.getElementById("toggle-password");
@@ -534,9 +563,9 @@ function mostrarLogin(mensajeError) {
   }
 
   overlay.style.display = "flex";
-
+  // Siempre mostrar tab de login (no registro) al mostrar el formulario
   cambiarTab("login");
-
+  // Poner el cursor en el campo email
   setTimeout(() => { if (emailField) emailField.focus(); }, 100);
 }
 
@@ -560,6 +589,7 @@ function cambiarTab(tab) {
   if (suc) suc.style.display = "none";
 }
 
+// ======== REGISTRO DEMO ========
 async function handleRegistro() {
   const nombre = (document.getElementById("reg-nombre")?.value || "").trim();
   const email = (document.getElementById("reg-email")?.value || "").trim();
@@ -584,6 +614,7 @@ async function handleRegistro() {
     const user = cred.user;
     const ahora = Timestamp.now();
 
+    // Intentar escribir la licencia hasta 3 veces antes de rendirse
     let licEscrita = false;
     for (let intento = 1; intento <= 3; intento++) {
       try {
@@ -599,10 +630,12 @@ async function handleRegistro() {
     }
 
     if (!licEscrita) {
-
+      // La cuenta en Auth fue creada pero no se pudo guardar la licencia.
+      // Igual dejamos al usuario entrar — verificarLicencia tiene recuperación automática.
       console.warn('[IAR] No se pudo escribir licencia tras 3 intentos. Se usará recuperación automática.');
     }
 
+    // registros_demo es opcional, no bloquear si falla
     try {
       await addDoc(collection(db, "registros_demo"), {
         uid: user.uid, nombre, email, creadoEn: ahora, estado: "activo"
@@ -619,6 +652,7 @@ async function handleRegistro() {
     const sessionRef = doc(db, "sessions", user.uid);
     await setDoc(sessionRef, { deviceId, email: user.email, loginAt: ahora, lastActivity: ahora });
 
+    // Proveer instancia de Firestore a script.js para sincronización de progreso
     if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
     window._firebaseUID = user.uid;
 
@@ -642,12 +676,15 @@ async function handleRegistro() {
   }
 }
 
+// ======== RESTRICCIONES DEMO ========
+// Referencias originales de funciones que demo puede parchear — se restauran al cerrar sesión
 let _origMostrarCuestionarioPreDemo = null;
 let _origMostrarRespuestasExamenPreDemo = null;
 
 function aplicarRestriccionesDemo() {
   window._demoCheckEnabled = true;
 
+  // ── Deshabilitar visualmente el simulador en el menú ──
   document.querySelectorAll('li').forEach(li => {
     const oc = li.getAttribute('onclick') || '';
     if (oc.includes('simulacro')) {
@@ -656,6 +693,12 @@ function aplicarRestriccionesDemo() {
     }
   });
 
+  // ── "Ver respuestas correctas": en DEMO se permite entrar al panel,
+  //    pero los exámenes individuales no permitidos están bloqueados (se hace abajo) ──
+  // (No deshabilitar el botón principal en el menú)
+
+  // ── Deshabilitar cuestionarios NO permitidos en el submenú IAR ──
+  // y agregar candado visual a ítems de respuestas correctas no permitidos ──
   document.querySelectorAll('li').forEach(li => {
     const oc = li.getAttribute('onclick') || '';
     const m = oc.match(/mostrarCuestionario\('([^']+)'\)/);
@@ -663,13 +706,13 @@ function aplicarRestriccionesDemo() {
       li.style.opacity = '0.4'; li.style.pointerEvents = 'none';
       li.title = 'Disponible en el acceso completo';
     }
-
+    // Ítems de respuestas correctas no permitidos: mostrar candado y permitir clic para modal
     const mr = oc.match(/mostrarRespuestasExamen\('([^']+)'\)/);
     if (mr && !DEMO_SECCIONES_PERMITIDAS.includes(mr[1])) {
       li.style.opacity = '0.55';
       li.style.cursor = 'pointer';
       li.title = 'Disponible en el acceso completo — clic para más info';
-
+      // Agregar ícono de candado si no tiene
       if (!li.querySelector('.demo-lock-icon')) {
         const lock = document.createElement('span');
         lock.className = 'demo-lock-icon';
@@ -677,11 +720,16 @@ function aplicarRestriccionesDemo() {
         lock.style.fontSize = '.8em';
         li.appendChild(lock);
       }
-
+      // Reemplazar onclick para mostrar modal
       li.setAttribute('onclick', 'window.mostrarModalRestriccionDemo && window.mostrarModalRestriccionDemo()');
     }
   });
 
+  // ── Interceptar mostrarRespuestasCorrectas (lista completa) ──
+  // En DEMO se permite entrar al panel; el bloqueo ocurre al intentar abrir un examen no permitido
+  // (no se intercepta aquí)
+
+  // ── Interceptar mostrarRespuestasExamen (cuestionario individual) ──
   const origRespExamen = window.mostrarRespuestasExamen;
   if (origRespExamen && !origRespExamen._esWrapperDemo) {
     _origMostrarRespuestasExamenPreDemo = origRespExamen;
@@ -695,6 +743,7 @@ function aplicarRestriccionesDemo() {
     window.mostrarRespuestasExamen = wrapperResp;
   }
 
+  // ── Interceptar simulacro ──
   const origSim = window.mostrarCuestionario;
   if (origSim && !origSim._esWrapperDemo) {
     _origMostrarCuestionarioPreDemo = origSim;
@@ -712,9 +761,10 @@ function aplicarRestriccionesDemo() {
   }
 }
 
+// Helper global para abrir el mail de contacto (accesible desde onclick inline)
 window._abrirCorreoContacto = function() {
   const url = `mailto:${CONTACTO_EMAIL}?subject=Consulta%20precios%20por%20planes%20disponibles`;
-
+  // Crear un <a> temporal y hacer clic programático — método más confiable en todos los navegadores
   const a = document.createElement('a');
   a.href = url;
   a.style.display = 'none';
@@ -726,23 +776,25 @@ window._abrirCorreoContacto = function() {
 function mostrarModalRestriccionDemo() {
   const existente = document.getElementById("demo-restriccion-overlay");
   if (existente) {
-
+    // Mover siempre a body para que position:fixed funcione correctamente
+    // sin importar en qué contenedor estaba antes
     if (existente.parentNode !== document.body) document.body.appendChild(existente);
     existente.style.cssText = 'position:fixed !important;top:0 !important;left:0 !important;' +
       'width:100% !important;height:100% !important;background:rgba(0,0,0,.6);' +
       'z-index:2147483647;display:flex;justify-content:center;align-items:center;' +
       'padding:16px;box-sizing:border-box;';
-
+    // Restaurar el botón y los mensajes por si el usuario tiene una solicitud
+    // rechazada y quiere volver a enviar
     const btnExistente = document.getElementById('demo-btn-solicitar-plan');
     const sucExistente = document.getElementById('demo-sol-exito');
     const errExistente = document.getElementById('demo-sol-error');
     if (btnExistente) { btnExistente.style.display = ''; btnExistente.disabled = false; btnExistente.textContent = '📩 Solicitar un plan'; }
     if (sucExistente) sucExistente.style.display = 'none';
     if (errExistente) errExistente.style.display = 'none';
-
+    // Re-verificar si tiene pendiente real para decidir si ocultar el botón
     const user = auth.currentUser;
     if (user && btnExistente) {
-      import("https:
+      import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js").then(({ getDocs, query: q, where: w, collection: col }) => {
         getDocs(q(col(db, 'solicitudes'), w('uid', '==', user.uid), w('estado', '==', 'pendiente')))
           .then(snap => {
             if (!snap.empty) {
@@ -756,7 +808,8 @@ function mostrarModalRestriccionDemo() {
   }
   const overlay = document.createElement("div");
   overlay.id = "demo-restriccion-overlay";
-
+  // Forzar estilos inline críticos para que position:fixed funcione siempre,
+  // independientemente de cualquier ancestor con transform u otro stacking context
   overlay.style.cssText = 'position:fixed !important;top:0 !important;left:0 !important;' +
     'width:100% !important;height:100% !important;background:rgba(0,0,0,.6);' +
     'z-index:2147483647;display:flex;justify-content:center;align-items:center;' +
@@ -828,6 +881,7 @@ function mostrarModalRestriccionDemo() {
   `;
   document.body.appendChild(overlay);
 
+  // Estado local del modal
   let _planDemo = null;
 
   window._seleccionarPlanDemo = function(plan) {
@@ -864,9 +918,11 @@ function mostrarModalRestriccionDemo() {
       const userEmail = user ? user.email : '';
       const userId = user ? user.uid : '';
 
+      // Verificar si ya existe una solicitud PENDIENTE de este usuario
+      // (solo estado=='pendiente', las rechazadas no cuentan)
       try {
         const { getDocs: gd3, query: q3, where: w3, collection: col3 } =
-          await import("https:
+          await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
         const solExistQ = await gd3(q3(col3(db, 'solicitudes'), w3('uid', '==', userId), w3('estado', '==', 'pendiente')));
         if (!solExistQ.empty) {
           sucDiv.textContent = '✅ Ya tenés una solicitud pendiente. Te contactaremos a la brevedad.';
@@ -875,7 +931,7 @@ function mostrarModalRestriccionDemo() {
           return;
         }
       } catch(queryErr) {
-
+        // Si no se puede leer (por reglas de Firestore), igual intentamos escribir
         console.warn('[IAR] No se pudo verificar solicitudes existentes:', queryErr.code || queryErr.message);
       }
 
@@ -901,6 +957,7 @@ function mostrarModalRestriccionDemo() {
   };
 }
 
+// ======== COUNTDOWN EN BARRA ========
 let countdownBarInterval = null;
 
 function formatCountdown(ms) {
@@ -943,6 +1000,7 @@ function iniciarCountdownLicencia(licencia) {
   }
 }
 
+// ======== SOLICITUD DE ACCESO ========
 function mostrarFormularioSolicitud() {
   inyectarEstilos();
 
@@ -951,6 +1009,7 @@ function mostrarFormularioSolicitud() {
     return;
   }
 
+  // Pre-fill email and name from current user if logged in (demo user)
   const currentUser = auth.currentUser;
   const prefillEmail = currentUser ? (currentUser.email || '') : '';
 
@@ -1049,12 +1108,14 @@ function mostrarLicenciaVencida(mensaje, esDemo, userData) {
   inyectarEstilos();
   document.body.style.overflow = "hidden";
 
+  // Remover el overlay de bloqueo inicial
   const bloqInicial = document.getElementById('auth-bloq-inicial');
   if (bloqInicial) bloqInicial.remove();
   const loginOverlay = document.getElementById("login-overlay");
   if (loginOverlay) loginOverlay.style.display = "none";
   if (document.getElementById("licencia-vencida-overlay")) return;
 
+  // userData puede venir como parámetro o del auth actual (usuario sigue logueado mientras ve el overlay)
   const currentUser = auth.currentUser
     ? { email: auth.currentUser.email, uid: auth.currentUser.uid }
     : (userData || null);
@@ -1105,6 +1166,7 @@ function mostrarLicenciaVencida(mensaje, esDemo, userData) {
   `;
   document.body.appendChild(overlay);
 
+  // Selección de plan
   let planSeleccionado = null;
   window._seleccionarPlanLV = function(plan) {
     planSeleccionado = plan;
@@ -1121,6 +1183,7 @@ function mostrarLicenciaVencida(mensaje, esDemo, userData) {
     if (sel) { sel.textContent = `✅ Plan seleccionado: ${plan}`; sel.style.display = 'block'; }
   };
 
+  // Copiar email
   window._copiarEmailLV = function() {
     try {
       navigator.clipboard.writeText(CONTACTO_EMAIL).then(() => {
@@ -1128,7 +1191,7 @@ function mostrarLicenciaVencida(mensaje, esDemo, userData) {
         if (m) { m.style.display = 'block'; setTimeout(() => { m.style.display = 'none'; }, 2500); }
       });
     } catch(e) {
-
+      // fallback: seleccionar texto
       const el = document.getElementById('lv-email-contacto');
       if (el) { const r = document.createRange(); r.selectNode(el); window.getSelection().removeAllRanges(); window.getSelection().addRange(r); }
     }
@@ -1148,9 +1211,12 @@ function mostrarLicenciaVencida(mensaje, esDemo, userData) {
       const userEmail = currentUser ? currentUser.email : "";
       const userId = currentUser ? currentUser.uid : "";
 
+      // Verificar si ya existe una solicitud pendiente de este usuario
+      // (envuelto en try/catch propio porque las reglas de Firestore pueden no
+      // permitir lectura de 'solicitudes' a usuarios normales)
       try {
         const { getDocs: gd2, query: q2, where: w2, collection: col2 } =
-          await import("https:
+          await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
         const solExistQ = await gd2(q2(col2(db, "solicitudes"), w2("uid", "==", userId)));
         const tienePendiente2 = !solExistQ.empty && solExistQ.docs.some(d => d.data().estado === "pendiente");
         if (tienePendiente2) {
@@ -1160,7 +1226,7 @@ function mostrarLicenciaVencida(mensaje, esDemo, userData) {
           return;
         }
       } catch(queryErr) {
-
+        // Si no se puede leer (por reglas de Firestore), igual intentamos escribir
         console.warn('[IAR] No se pudo verificar solicitudes existentes:', queryErr.code || queryErr.message);
       }
 
@@ -1193,6 +1259,8 @@ function mostrarLicenciaVencida(mensaje, esDemo, userData) {
   });
 }
 
+// ======== HANDLE LOGIN ========
+// ======== RECUPERACIÓN DE CONTRASEÑA ========
 async function handleRecuperarPassword() {
   const email = (document.getElementById("recuperar-email")?.value || "").trim();
   const msgDiv = document.getElementById("recuperar-msg");
@@ -1257,11 +1325,13 @@ async function handleLogin() {
       btn.disabled = false;
       loading.textContent = "";
       if (licencia.vencida) {
-
+        // NO hacemos signOut aquí — el usuario sigue autenticado para poder enviar
+        // la solicitud de renovación a Firestore. El signOut ocurre al presionar
+        // "Cerrar sesión" dentro del overlay de licencia vencida.
         const userDataParaVencida = { email: user.email, uid: user.uid };
         mostrarLicenciaVencida(licencia.mensaje, licencia.esDemo, userDataParaVencida);
       } else {
-
+        // (iar_sesion_activa ya no se usa);
         await signOut(auth);
         errDiv.textContent = licencia.mensaje;
         errDiv.style.display = "block";
@@ -1273,6 +1343,12 @@ async function handleLogin() {
     const sessionRef = doc(db, "sessions", user.uid);
     const deviceId = getDeviceId();
 
+    // Siempre sobreescribir la sesión con el nuevo deviceId.
+    // El onSnapshot activo en cualquier otra ventana o dispositivo
+    // detectará el cambio y mostrará la pantalla de "sesión desplazada"
+    // automáticamente, cerrando esa sesión anterior.
+    // El admin puede abrir sesión libremente sin restricciones.
+
     await setDoc(sessionRef, {
       deviceId,
       email: user.email,
@@ -1280,6 +1356,7 @@ async function handleLogin() {
       lastActivity: serverTimestamp()
     });
 
+    // Proveer instancia de Firestore a script.js para sincronización de progreso
     if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
     window._firebaseUID = user.uid;
 
@@ -1308,20 +1385,22 @@ function ocultarLogin(navegarAMenu = false, uid = null) {
   if (overlay) overlay.style.display = "none";
   document.body.style.overflow = "";
 
+  // Remover el overlay de bloqueo inicial (spinner azul) si todavía está
   const bloqInicial = document.getElementById('auth-bloq-inicial');
   if (bloqInicial) bloqInicial.remove();
 
+  // Señal para script.js: Firebase confirmó la sesión, puede proceder con la navegación
   window._firebaseSessionReady = true;
   if (typeof window._onFirebaseSessionReady === 'function') {
     window._onFirebaseSessionReady(navegarAMenu);
   }
 
   if (navegarAMenu) {
-
+    // Login manual → siempre ir al menú principal
     const fnIrAlMenu = function() {
       history.replaceState({ section: null }, 'Menú Principal', '#menu');
       setTimeout(function() {
-
+        // Ocultar todo lo que pueda estar visible de una sesión anterior
         const buscador = document.getElementById('buscador-preguntas');
         if (buscador) buscador.classList.add('oculto');
         const buscadorInput = document.getElementById('buscador-input');
@@ -1342,7 +1421,7 @@ function ocultarLogin(navegarAMenu = false, uid = null) {
         });
         const modPanel = document.getElementById("modificar-respuestas-panel");
         if (modPanel) modPanel.style.display = "none";
-
+        // Mostrar menú principal
         const menuPrincipal = document.getElementById("menu-principal");
         if (menuPrincipal) {
           menuPrincipal.classList.remove("oculto");
@@ -1355,46 +1434,48 @@ function ocultarLogin(navegarAMenu = false, uid = null) {
   }
 }
 
+// ======== MENSAJE DE BIENVENIDA ========
 async function mostrarBienvenidaSiCorresponde(uid, fnIrAlMenu) {
-
+  // Si no tenemos uid, ir directo al menú
   if (!uid) { fnIrAlMenu(); return; }
 
   try {
     const prefKey = "bienvenida_oculta_" + uid;
-
+    // Primero chequear localStorage como caché rápido
     if (localStorage.getItem(prefKey) === "1") {
       fnIrAlMenu();
       return;
     }
-
+    // Verificar en Firestore
     const prefDoc = await getDoc(doc(db, "config", prefKey));
     if (prefDoc.exists() && prefDoc.data().ocultar === true) {
-      localStorage.setItem(prefKey, "1");
+      localStorage.setItem(prefKey, "1"); // cachear
       fnIrAlMenu();
       return;
     }
   } catch(e) {
-
+    // Si falla la lectura, mostrar bienvenida igual
   }
   mostrarPantallaBienvenida(uid, fnIrAlMenu);
 }
 
 function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
-
+  // Inyectar estilos
   if (!document.getElementById("bienvenida-styles")) {
     const st = document.createElement("style");
     st.id = "bienvenida-styles";
     st.textContent = `
-      @import url('https:
+      @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Lato:wght@300;400;700&display=swap');
 
       #bienvenida-overlay {
         position: fixed; inset: 0; z-index: 9999;
         background: linear-gradient(150deg, #0f1e3c 0%, #1a3665 40%, #1e4080 70%, #163060 100%);
         display: flex; align-items: center; justify-content: center;
-        
+        /* padding vertical generoso: deja aire arriba/abajo y evita que el card
+           toque los bordes en pantallas pequeñas */
         padding: 16px;
         box-sizing: border-box;
-        
+        /* El overlay mismo scrollea si el contenido es más alto que la ventana */
         overflow-y: auto;
       }
       @keyframes bv-fadein { from { opacity: 0; } to { opacity: 1; } }
@@ -1406,14 +1487,14 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
         -webkit-backdrop-filter: blur(18px);
         border: 1px solid rgba(255,255,255,0.12);
         border-radius: 18px;
-        
+        /* ancho máximo cómodo para escritorio; en mobile ocupa todo el ancho disponible */
         max-width: 600px; width: 100%;
-        
+        /* padding equilibrado para escritorio */
         padding: 36px 40px 28px;
         box-shadow: 0 32px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.06) inset;
         animation: bv-slideup 0.55s cubic-bezier(0.22,1,0.36,1) 0.1s both;
         position: relative;
-        
+        /* sin overflow-y: el overlay padre ya scrollea si hace falta */
         box-sizing: border-box;
       }
       #bienvenida-card::before {
@@ -1545,7 +1626,7 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
       }
       .bv-no-mostrar:hover .bv-no-mostrar-label { color: #93c5fd; }
 
-      
+      /* ── Mobile: reducir padding y tamaños de fuente ── */
       @media (max-width: 600px) {
         #bienvenida-overlay { padding: 12px; align-items: flex-start; padding-top: 20px; }
         #bienvenida-card { padding: 24px 18px 20px; border-radius: 14px; }
@@ -1557,7 +1638,7 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
         #bv-btn-aceptar { padding: 12px; font-size: 0.88rem; margin-top: 16px; }
       }
 
-      
+      /* ── Pantallas muy bajas (landscape mobile) ── */
       @media (max-height: 600px) {
         #bienvenida-overlay { align-items: flex-start; padding-top: 12px; }
         #bienvenida-card { padding: 20px 20px 16px; }
@@ -1569,12 +1650,15 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
     document.head.appendChild(st);
   }
 
+  // Remover el overlay de bloqueo inicial si todavía está
   const bloqInicial = document.getElementById('auth-bloq-inicial');
   if (bloqInicial) bloqInicial.remove();
 
+  // Eliminar overlay anterior si existe (re-login sin recargar página)
   const overlayViejo = document.getElementById("bienvenida-overlay");
   if (overlayViejo) overlayViejo.remove();
 
+  // Crear overlay — opacidad inicial 0, fade-in via JS para no bloquear clicks durante la animación CSS
   const overlay = document.createElement("div");
   overlay.id = "bienvenida-overlay";
   overlay.style.opacity = "0";
@@ -1606,11 +1690,13 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
   `;
   document.body.appendChild(overlay);
 
+  // Fade-in via JS — no bloquea clicks como haría una CSS animation con opacity:0 inicial
   requestAnimationFrame(function() {
     overlay.style.transition = "opacity 0.45s ease";
     overlay.style.opacity = "1";
   });
 
+  // Toggle checkbox — querySelector sobre el overlay propio para evitar conflictos de IDs con instancias previas
   let noMostrar = false;
   const checkVisual = overlay.querySelector("#bv-check-visual");
   const labelNoMostrar = overlay.querySelector("#bv-label-no-mostrar");
@@ -1624,6 +1710,7 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
     }
   });
 
+  // Botón aceptar — querySelector sobre el overlay propio
   const btnAceptar = overlay.querySelector("#bv-btn-aceptar");
   btnAceptar.addEventListener("click", async function() {
     if (noMostrar && uid) {
@@ -1632,10 +1719,10 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
         await setDoc(doc(db, "config", prefKey), { ocultar: true, uid: uid, fecha: new Date().toISOString() });
         localStorage.setItem(prefKey, "1");
       } catch(e) {
-
+        // Si falla guardar, igual continuar
       }
     }
-
+    // Animar salida
     overlay.style.transition = "opacity 0.35s ease";
     overlay.style.opacity = "0";
     setTimeout(function() {
@@ -1645,25 +1732,28 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
   });
 }
 
+// ======== BARRA INFERIOR ESTÁTICA ========
 function mostrarBarraSesion(email, licencia) {
-
+  // Exponer si es admin para que script.js pueda usarlo
   window._esAdmin = (email === ADMIN_EMAIL);
-
+  // Exponer DB y usuario para el módulo de comentarios (integrado en script_onebyone.js)
   window._firestoreDB_comentarios = db;
   window._authCurrentUser = auth.currentUser;
 
+  // Mostrar u ocultar el ítem "Ver Respuestas Correctas" del menú según si es admin
   const liRespuestas = document.getElementById('menu-ver-respuestas-correctas') || document.querySelector('li[onclick="mostrarRespuestasCorrectas()"]');
   if (liRespuestas) liRespuestas.style.display = window._esAdmin ? '' : 'none';
-
+  // Mostrar u ocultar el ítem "Modificar Respuestas" del menú según si es admin
   const liModificar = document.getElementById('menu-modificar-respuestas');
   if (liModificar) liModificar.style.display = window._esAdmin ? '' : 'none';
-
+  // Eliminar barra anterior si existe (para re-renderizar)
   const barraVieja = document.getElementById("barra-sesion");
   if (barraVieja) barraVieja.remove();
 
   const barra = document.createElement("div");
   barra.id = "barra-sesion";
 
+  // Izquierda: usuario + badge licencia
   const izq = document.createElement("div");
   izq.id = "barra-sesion-izq";
 
@@ -1694,9 +1784,11 @@ function mostrarBarraSesion(email, licencia) {
   izq.appendChild(info);
   izq.appendChild(badge);
 
+  // Derecha: botones cerrar sesión (y admin si corresponde)
   const der = document.createElement("div");
   der.id = "barra-sesion-der";
 
+  // Botón admin solo para el admin
   if (email === ADMIN_EMAIL) {
     const btnAdmin = document.createElement("button");
     btnAdmin.id = "btn-abrir-admin";
@@ -1704,7 +1796,8 @@ function mostrarBarraSesion(email, licencia) {
     btnAdmin.style.position = "relative";
     btnAdmin.addEventListener("click", mostrarPanelAdmin);
     der.appendChild(btnAdmin);
-
+    // Iniciar listener DESPUÉS de que la barra esté en el DOM
+    // (si se llama antes, el onSnapshot no encuentra btn-abrir-admin)
   }
 
   const btnLogout = document.createElement("button");
@@ -1720,16 +1813,18 @@ function mostrarBarraSesion(email, licencia) {
   if (email === ADMIN_EMAIL) iniciarListenerSolicitudes();
 }
 
+// ======== LISTENER TIEMPO REAL SOLICITUDES ========
 function iniciarListenerSolicitudes() {
-  if (_solicitudesUnsubscribe) return;
+  if (_solicitudesUnsubscribe) return; // ya activo
 
   const q = query(collection(db, "solicitudes"), where("estado", "==", "pendiente"));
 
   _solicitudesUnsubscribe = onSnapshot(q, (snapshot) => {
-
+    // Guardar siempre el último snapshot para renderizarlo cuando se abra el panel
     _ultimoSnapshotSolicitudes = snapshot;
     const total = snapshot.size;
 
+    // Actualizar badge en el botón Admin
     const btn = document.getElementById("btn-abrir-admin");
     if (btn) {
       let badge = btn.querySelector(".admin-sol-badge");
@@ -1745,6 +1840,7 @@ function iniciarListenerSolicitudes() {
       }
     }
 
+    // Si el panel está abierto, renderizar solicitudes en tiempo real
     const overlay = document.getElementById("admin-overlay");
     if (overlay && overlay.style.display !== "none") {
       renderizarSolicitudesAdmin(snapshot);
@@ -1813,10 +1909,11 @@ function renderizarSolicitudesAdmin(snapshot) {
   solRenovDiv.innerHTML = renderTabla(renovaciones, "renovacion");
 }
 
+// ======== PANEL ADMINISTRADOR ========
 async function mostrarPanelAdmin() {
   if (document.getElementById("admin-overlay")) {
     document.getElementById("admin-overlay").style.display = "flex";
-
+    // Renderizar solicitudes guardadas inmediatamente antes de cargar el resto
     if (_ultimoSnapshotSolicitudes) {
       renderizarSolicitudesAdmin(_ultimoSnapshotSolicitudes);
     }
@@ -1824,6 +1921,7 @@ async function mostrarPanelAdmin() {
     return;
   }
 
+  // Estilos extra para el panel admin mejorado
   if (!document.getElementById("admin-extra-styles")) {
     const s = document.createElement("style");
     s.id = "admin-extra-styles";
@@ -1945,8 +2043,9 @@ async function cargarDatosAdmin() {
   if (!usrDiv) return;
 
   try {
-    const { getDocs, collection: col, query, where, orderBy } = await import("https:
+    const { getDocs, collection: col, query, where, orderBy } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
 
+    // Estadísticas de visitas únicas
     if (visDiv) {
       try {
         const statsSnap = await getDoc(doc(db, "estadisticas", "visitas"));
@@ -1974,15 +2073,18 @@ async function cargarDatosAdmin() {
       } catch(e) { visDiv.innerHTML = '<em style="color:#dc2626;">Error al cargar visitas.</em>'; }
     }
 
+    // ── Solicitudes pendientes ──
+    // Si ya tenemos un snapshot guardado del listener, renderizarlo inmediatamente
     if (_ultimoSnapshotSolicitudes) {
       renderizarSolicitudesAdmin(_ultimoSnapshotSolicitudes);
     } else {
       if (solNuevosDiv) solNuevosDiv.innerHTML = '<em style="color:#94a3b8;font-size:.82rem;">Esperando datos en tiempo real...</em>';
       if (solRenovDiv) solRenovDiv.innerHTML = '<em style="color:#94a3b8;font-size:.82rem;">Esperando datos en tiempo real...</em>';
     }
-
+    // Si el listener aún no está activo (ej: admin abre panel desde otra ruta), arrancarlo
     if (!_solicitudesUnsubscribe) iniciarListenerSolicitudes();
 
+    // ── Usuarios con licencia ──
     const licSnap = await getDocs(col(db, "licencias"));
     if (licSnap.empty) {
       usrDiv.innerHTML = '<em style="color:#94a3b8;font-size:.85rem;">No hay usuarios con licencia.</em>';
@@ -1990,7 +2092,7 @@ async function cargarDatosAdmin() {
       const ahora = new Date();
       const docs = [];
       licSnap.forEach(d => docs.push(d));
-
+      // Activos primero, vencidos al final
       docs.sort((a, b) => {
         const getTs = d => {
           const v = d.data().vencimiento;
@@ -2013,12 +2115,14 @@ async function cargarDatosAdmin() {
         const esDemo = l.esDemo === true;
         const vencido = !l.porVida && !esDemo && vencDate && ahora > vencDate;
 
+        // Estado badge
         let estadoBadge;
         if (esDemo) estadoBadge = '<span class="admin-badge badge-demo">🆓 Demo</span>';
         else if (l.porVida) estadoBadge = '<span class="admin-badge badge-activo">✅ Activo</span>';
         else if (vencido) estadoBadge = '<span class="admin-badge badge-vencido">❌ Vencido</span>';
         else estadoBadge = '<span class="admin-badge badge-activo">✅ Activo</span>';
 
+        // Tiempo restante
         let tiempoRestante = '-';
         if (esDemo) {
           tiempoRestante = '<span style="color:#92400e;font-size:.75rem;">—</span>';
@@ -2073,9 +2177,14 @@ async function cargarDatosAdmin() {
     if (solNuevosDiv) solNuevosDiv.innerHTML = '<em style="color:#dc2626;">Error al cargar datos.</em>';
   }
 }
-
+// ── Aprobar solicitud ─────────────────────────────────────────────────────
+// El vencimiento se calcula desde el momento exacto de aprobación.
+// Si el usuario ya existe en "licencias" (renovación), se actualiza su plan.
+// Si es nuevo, se crea su entrada. La solicitud se elimina de Firestore para
+// que desaparezca de la lista inmediatamente. El cache local del snapshot
+// también se actualiza para evitar re-aparición por race condition.
 window.aprobarSolicitud = async function(docId, email, uidSolicitud, planLabel) {
-
+  // Leer el valor del select en el momento del click (puede venir como string o como value)
   const selEl = document.getElementById('sol-plan-sel-' + docId);
   const planLabelFinal = selEl ? selEl.value : (planLabel || "1 mes");
 
@@ -2098,10 +2207,12 @@ window.aprobarSolicitud = async function(docId, email, uidSolicitud, planLabel) 
   const msgDiv = document.getElementById("admin-msg-acciones");
   try {
     const { getDocs, collection: col2, query: q2, where: w2 } =
-      await import("https:
+      await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
 
+    // Escribir/actualizar la licencia en Firebase
     let licSet = false;
 
+    // 1) Si tiene UID, intentar directo
     if (uidSolicitud && uidSolicitud !== '-') {
       try {
         await setDoc(doc(db, "licencias", uidSolicitud), licData, { merge: false });
@@ -2109,6 +2220,7 @@ window.aprobarSolicitud = async function(docId, email, uidSolicitud, planLabel) 
       } catch(e) { console.warn("No se pudo setDoc por UID directo:", e); }
     }
 
+    // 2) Si no se pudo por UID, buscar por email en licencias existentes
     if (!licSet) {
       const licQ = await getDocs(q2(col2(db, "licencias"), w2("email", "==", email)));
       if (!licQ.empty) {
@@ -2119,6 +2231,8 @@ window.aprobarSolicitud = async function(docId, email, uidSolicitud, planLabel) 
       }
     }
 
+    // 3) Si el usuario es completamente nuevo (sin licencia previa), crear con UID de la solicitud
+    //    o con un ID generado a partir del email
     if (!licSet) {
       const nuevoId = (uidSolicitud && uidSolicitud !== '-')
         ? uidSolicitud
@@ -2127,10 +2241,12 @@ window.aprobarSolicitud = async function(docId, email, uidSolicitud, planLabel) 
       licSet = true;
     }
 
+    // 1. Respuesta visual inmediata: ocultar la fila del DOM
     document.querySelectorAll(".admin-tabla tr").forEach(row => {
       if (row.innerHTML.includes(docId)) row.style.display = "none";
     });
 
+    // 2. Actualizar cache local ANTES de los writes para evitar re-aparición por race condition
     if (_ultimoSnapshotSolicitudes) {
       const docsActualizados = [];
       _ultimoSnapshotSolicitudes.forEach(d => { if (d.id !== docId) docsActualizados.push(d); });
@@ -2139,13 +2255,18 @@ window.aprobarSolicitud = async function(docId, email, uidSolicitud, planLabel) 
       renderizarSolicitudesAdmin(fakeSnap);
     }
 
+    // 3. Marcar como 'aprobada' primero (el listener filtra estado=='pendiente'
+    //    y el doc sale del snapshot automáticamente)
     await updateDoc(doc(db, "solicitudes", docId), { estado: "aprobada" });
 
+    // 4. Eliminar físicamente la solicitud aprobada
     await deleteDoc(doc(db, "solicitudes", docId));
 
+    // 5. Eliminar también cualquier otra solicitud pendiente del mismo usuario
+    //    (por UID y por email) para no dejar duplicados
     try {
       const { getDocs: gd4, query: q4, where: w4, collection: col4 } =
-        await import("https:
+        await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
       const extraPromises = [];
       if (uidSolicitud && uidSolicitud !== '-') {
         const qUid = await gd4(q4(col4(db, "solicitudes"), w4("uid", "==", uidSolicitud)));
@@ -2168,10 +2289,11 @@ window.aprobarSolicitud = async function(docId, email, uidSolicitud, planLabel) 
       setTimeout(() => { if (msgDiv) { msgDiv.style.display = "none"; msgDiv.className = "admin-msg"; } }, 5000);
     }
 
+    // Recargar solo la tabla de usuarios con licencia (las solicitudes ya se actualizaron en tiempo real)
     await cargarDatosAdmin();
   } catch(e) {
     console.error("Error aprobando solicitud:", e);
-
+    // Restaurar visibilidad si falló
     document.querySelectorAll(".admin-tabla tr").forEach(row => {
       if (row.innerHTML.includes(docId)) row.style.display = "";
     });
@@ -2183,14 +2305,19 @@ window.aprobarSolicitud = async function(docId, email, uidSolicitud, planLabel) 
   }
 };
 
+// ── Rechazar solicitud ────────────────────────────────────────────────────
+// Primero actualiza estado='rechazado' (el listener filtra por estado=='pendiente'
+// y el doc desaparece del snapshot), luego elimina físicamente el doc.
+// El usuario podrá volver a solicitar porque no quedará doc pendiente a su nombre.
 window.rechazarSolicitud = async function(docId) {
   const msgDiv = document.getElementById("admin-msg-acciones");
   try {
-
+    // 1. Respuesta visual inmediata: ocultar la fila del DOM
     document.querySelectorAll(".admin-tabla tr").forEach(row => {
       if (row.innerHTML.includes(docId)) row.style.display = "none";
     });
 
+    // 2. Actualizar cache local ANTES de los writes para evitar re-aparición por race condition
     if (_ultimoSnapshotSolicitudes) {
       const docsActualizados = [];
       _ultimoSnapshotSolicitudes.forEach(d => { if (d.id !== docId) docsActualizados.push(d); });
@@ -2199,8 +2326,11 @@ window.rechazarSolicitud = async function(docId) {
       renderizarSolicitudesAdmin(fakeSnap);
     }
 
+    // 3. Actualizar estado a 'rechazado' → el onSnapshot (estado=='pendiente')
+    //    eliminará el doc del snapshot y re-renderizará automáticamente sin él.
     await updateDoc(doc(db, "solicitudes", docId), { estado: "rechazado" });
 
+    // 4. Eliminar físicamente el doc (el usuario puede volver a solicitar)
     await deleteDoc(doc(db, "solicitudes", docId));
 
     if (msgDiv) {
@@ -2211,7 +2341,7 @@ window.rechazarSolicitud = async function(docId) {
     }
   } catch(e) {
     console.error("Error rechazando solicitud:", e);
-
+    // Restaurar visibilidad si falló
     document.querySelectorAll(".admin-tabla tr").forEach(row => {
       if (row.innerHTML.includes(docId)) row.style.display = "";
     });
@@ -2223,6 +2353,7 @@ window.rechazarSolicitud = async function(docId) {
   }
 };
 
+// ── Reactivar plan ────────────────────────────────────────────────────────
 window.reactivarUsuario = async function(uid) {
   const sel = document.getElementById("sel-plan-" + uid);
   if (!sel) return;
@@ -2241,16 +2372,17 @@ window.reactivarUsuario = async function(uid) {
     }
     await setDoc(doc(db, "licencias", uid), licData);
 
+    // Eliminar solicitudes pendientes de este usuario (queries simples sin índice compuesto)
     const { getDocs: gd3, query: q3, where: w3, collection: col3 } =
-      await import("https:
+      await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
     const elimPromises = [];
     try {
-
+      // Buscar por uid (query simple, sin índice compuesto)
       const solQ = await gd3(q3(col3(db, "solicitudes"), w3("uid", "==", uid)));
       solQ.forEach(d => {
         if (d.data().estado === "pendiente") elimPromises.push(deleteDoc(doc(db, "solicitudes", d.id)));
       });
-
+      // Si no encontró por uid, buscar por email
       if (elimPromises.length === 0 && emailUsuario) {
         const solQEmail = await gd3(q3(col3(db, "solicitudes"), w3("email", "==", emailUsuario)));
         solQEmail.forEach(d => {
@@ -2259,7 +2391,7 @@ window.reactivarUsuario = async function(uid) {
       }
       if (elimPromises.length > 0) await Promise.all(elimPromises);
     } catch(solErr) {
-
+      // No bloquear la reactivación si falla la limpieza de solicitudes
       console.warn("[IAR] No se pudo limpiar solicitudes pendientes:", solErr.message);
     }
 
@@ -2267,6 +2399,7 @@ window.reactivarUsuario = async function(uid) {
   } catch(err) { alert("Error al reactivar: " + (err.message || err)); }
 };
 
+// ── Eliminar usuario ──────────────────────────────────────────────────────
 window.eliminarUsuario = async function(uid) {
   if (!confirm("¿Eliminar este usuario?\nUID: " + uid + "\n\nSe borrará su licencia y sesión de Firestore.")) return;
   try {
@@ -2276,11 +2409,12 @@ window.eliminarUsuario = async function(uid) {
   } catch(err) { alert("Error al eliminar: " + (err.message || err)); }
 };
 
+// ── Eliminar vencidos hace +3 meses ──────────────────────────────────────
 window.limpiarVencidosAdmin = async function() {
   const msgEl = document.getElementById("admin-limpiar-msg");
   if (msgEl) msgEl.textContent = "Calculando...";
   try {
-    const { getDocs, collection: col3 } = await import("https:
+    const { getDocs, collection: col3 } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
     const licSnap = await getDocs(col3(db, "licencias"));
     const ahora = new Date();
     const tresM = new Date(ahora); tresM.setMonth(tresM.getMonth() - 3);
@@ -2302,22 +2436,25 @@ window.limpiarVencidosAdmin = async function() {
   } catch(err) { if (msgEl) msgEl.textContent = "Error: " + (err.message || err); }
 };
 
+// ── Borrar todos los chats ────────────────────────────────────────────────
 window.borrarTodosLosChats = async function() {
   if (!confirm("¿Borrar TODOS los mensajes del chat?\n\nEsta acción no se puede deshacer.")) return;
   try {
-    const { remove: rtRemove } = await import("https:
+    const { remove: rtRemove } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
     await rtRemove(ref(rtdb, 'chat/mensajes'));
-
+    // Clear local welcome flag so it shows again
     localStorage.removeItem('iar_chat_welcome_shown_v1');
-
+    // Re-render chat if open
     const container = document.getElementById('chat-mensajes');
     if (container) container.innerHTML = '<div class="chat-vacio">Chat limpiado. ¡Sé el primero en escribir!</div>';
     alert("✅ Todos los mensajes del chat fueron eliminados.");
   } catch(err) { alert("Error al borrar chat: " + (err.message || err)); }
 };
 
+// ======== LOGOUT ========
+// Muestra el diálogo de confirmación y llama a handleLogout si acepta
 window._confirmarCierreSesion = function() {
-
+  // Detectar si hay un simulacro IAR en curso (con progreso incompleto)
   var _haySimulacroEnCurso = false;
   try {
     var _rawSt = localStorage.getItem('quiz_state_v3');
@@ -2331,6 +2468,7 @@ window._confirmarCierreSesion = function() {
     }
   } catch(e) {}
 
+  // Inyectar estilos del diálogo si no existen
   if (!document.getElementById("logout-confirm-styles")) {
     const s = document.createElement("style");
     s.id = "logout-confirm-styles";
@@ -2398,6 +2536,7 @@ window._confirmarCierreSesion = function() {
   });
 };
 
+// Limpia todos los datos del timer y simulacro IAR del localStorage
 function _limpiarTimerSimulacroIAR() {
   try {
     localStorage.removeItem('simulacro_iar_timer_end_v1');
@@ -2411,29 +2550,30 @@ function _limpiarTimerSimulacroIAR() {
 
 async function handleLogout() {
   try {
-
+    // Si el admin tenía abierta la página "Modificar Respuestas", cerrarla y resetear auth
     if (window._esAdmin && window._modificarAutorizado) {
       window._modificarAutorizado = false;
       window._seccionEditorActual = null;
       window._preguntasEditor = null;
       window._cambiosPendientes = {};
-
+      // Ocultar el panel de modificar si estaba visible
       const modOverlay = document.getElementById('modificar-overlay');
       if (modOverlay) modOverlay.remove();
-
+      // Ocultar también el panel de modificar respuestas (nombre correcto del elemento)
       const modPanel = document.getElementById('modificar-respuestas-panel');
       if (modPanel) modPanel.style.display = 'none';
     }
-
+    // Reset de _modificarAutorizado también como variable local del módulo
     _modificarAutorizado = false;
 
+    // Limpiar progreso del simulacro IAR al cerrar sesión (el progreso no se guarda entre sesiones)
     try {
       var rawState = localStorage.getItem('quiz_state_v3');
       if (rawState) {
         var allState = JSON.parse(rawState);
         var simState = allState['simulacro_iar'];
         if (simState && !simState.totalShown) {
-
+          // Progreso incompleto → eliminar completamente
           delete allState['simulacro_iar'];
           localStorage.setItem('quiz_state_v3', JSON.stringify(allState));
         }
@@ -2443,13 +2583,19 @@ async function handleLogout() {
       localStorage.removeItem('simulacro_iar_timer_end_v1');
     } catch(ePersist) {}
 
+    // -- CRITICO: detener el listener de sesion ANTES de borrar el doc --
+    // Si no se hace, el onSnapshot detecta que el doc desaparecio y muestra
+    // la pantalla "Sesion finalizada por el administrador" -- que es incorrecta
+    // cuando el propio usuario esta cerrando sesion voluntariamente.
     if (monitoreoSnapshot) { monitoreoSnapshot(); monitoreoSnapshot = null; }
     if (monitoreoInterval) { clearInterval(monitoreoInterval); monitoreoInterval = null; }
     detenerListenersActividad();
 
     const user = auth.currentUser;
     if (user) await deleteDoc(doc(db, "sessions", user.uid));
+    // (iar_sesion_activa ya no se usa);
 
+    // Limpiar timer y datos del simulacro IAR al cerrar sesión
     _limpiarTimerSimulacroIAR();
 
     await signOut(auth);
@@ -2458,6 +2604,7 @@ async function handleLogout() {
   }
 }
 
+// ======== PANTALLA SESIÓN DESPLAZADA ========
 function mostrarPantallaDesplazada(tipo) {
   ["login-overlay", "sesion-desplazada-overlay"].forEach(id => {
     const el = document.getElementById(id);
@@ -2523,24 +2670,26 @@ function mostrarPantallaDesplazada(tipo) {
   });
 }
 
+// ======== MONITOREO DE SESIÓN + AUTO-LOGOUT POR INACTIVIDAD ========
 let monitoreoInterval = null;
 let monitoreoSnapshot = null;
 let _monitoreoUserRef = null;
 let inactividadTimeout = null;
-let inactividadAviso1 = null;
-let inactividadAviso2 = null;
-let inactividadAviso3 = null;
+let inactividadAviso1 = null;   // aviso a los 20 min
+let inactividadAviso2 = null;   // aviso a los 25 min
+let inactividadAviso3 = null;   // aviso a los 29 min (cuenta regresiva)
 let cuentaRegresivaInterval = null;
 let ultimaActividad = Date.now();
 
-const INACTIVIDAD_TOTAL_MS  = 30 * 60 * 1000;
-const AVISO_1_MS            = 20 * 60 * 1000;
-const AVISO_2_MS            = 25 * 60 * 1000;
-const AVISO_3_MS            = 29 * 60 * 1000;
+const INACTIVIDAD_TOTAL_MS  = 30 * 60 * 1000;  // 30 min → cierre
+const AVISO_1_MS            = 20 * 60 * 1000;  // 20 min → primer aviso
+const AVISO_2_MS            = 25 * 60 * 1000;  // 25 min → segundo aviso
+const AVISO_3_MS            = 29 * 60 * 1000;  // 29 min → cuenta regresiva 60s
 
+// Registrar actividad del usuario
 function registrarActividad() {
   ultimaActividad = Date.now();
-
+  // Si hay un modal de inactividad abierto, cerrarlo
   const modal = document.getElementById("inactividad-modal");
   if (modal) modal.remove();
   if (cuentaRegresivaInterval) { clearInterval(cuentaRegresivaInterval); cuentaRegresivaInterval = null; }
@@ -2565,7 +2714,7 @@ function reiniciarTimersInactividad() {
   inactividadAviso3 = setTimeout(() => mostrarAvisoInactividad(
     "🚨 Cerrando sesión",
     "Tu sesión se cerrará por inactividad en:",
-    true
+    true  // con cuenta regresiva
   ), AVISO_3_MS);
 
   inactividadTimeout = setTimeout(async () => {
@@ -2585,11 +2734,12 @@ function limpiarTimersInactividad() {
 }
 
 function mostrarAvisoInactividad(titulo, mensaje, conCuentaRegresiva) {
-
+  // Remover modal anterior si existe
   const viejo = document.getElementById("inactividad-modal");
   if (viejo) viejo.remove();
   if (cuentaRegresivaInterval) { clearInterval(cuentaRegresivaInterval); cuentaRegresivaInterval = null; }
 
+  // Inyectar estilos del modal si no existen
   if (!document.getElementById("inactividad-styles")) {
     const s = document.createElement("style");
     s.id = "inactividad-styles";
@@ -2651,9 +2801,9 @@ function mostrarAvisoInactividad(titulo, mensaje, conCuentaRegresiva) {
 }
 
 function iniciarListenersActividad(userObj) {
-
+  // La cuenta admin no tiene cierre por inactividad
   if (userObj && userObj.email === ADMIN_EMAIL) return;
-
+  // Escuchar eventos de actividad del usuario
   ["mousemove","keydown","click","touchstart","scroll"].forEach(ev => {
     document.addEventListener(ev, registrarActividad, { passive: true });
   });
@@ -2674,6 +2824,9 @@ function iniciarMonitoreoSesion(user) {
   const deviceId = getDeviceId();
   iniciarListenersActividad(user);
 
+  // ── LISTENER EN TIEMPO REAL ──────────────────────────────────────────
+  // Detecta INMEDIATAMENTE si otra ventana o dispositivo inició sesión.
+  // Reacciona en menos de 1 segundo, sin depender de polling.
   const sessionRef = doc(db, "sessions", user.uid);
   let primeraLectura = true;
 
@@ -2681,6 +2834,7 @@ function iniciarMonitoreoSesion(user) {
     (snap) => {
       if (primeraLectura) { primeraLectura = false; return; }
 
+      // Documento eliminado → sesión cerrada externamente (ej: admin eliminó usuario)
       if (!snap.exists()) {
         if (monitoreoSnapshot) { monitoreoSnapshot(); monitoreoSnapshot = null; }
         if (monitoreoInterval) { clearInterval(monitoreoInterval); monitoreoInterval = null; }
@@ -2693,6 +2847,7 @@ function iniciarMonitoreoSesion(user) {
       const data = snap.data();
       const esAdmin = user.email === ADMIN_EMAIL;
 
+      // deviceId cambió → otra ventana o dispositivo tomó la sesión
       if (!esAdmin && data.deviceId && data.deviceId !== deviceId) {
         if (monitoreoSnapshot) { monitoreoSnapshot(); monitoreoSnapshot = null; }
         if (monitoreoInterval) { clearInterval(monitoreoInterval); monitoreoInterval = null; }
@@ -2706,6 +2861,9 @@ function iniciarMonitoreoSesion(user) {
     }
   );
 
+  // ── HEARTBEAT ────────────────────────────────────────────────────────
+  // Actualiza lastActivity cada 60s. Se pausa cuando la pestaña está oculta
+  // para evitar escrituras innecesarias.
   let _heartbeatPausado = false;
 
   function _onVisibilityChange() {
@@ -2728,10 +2886,10 @@ function iniciarMonitoreoSesion(user) {
     if (!auth.currentUser) return;
     try {
       const snap = await getDoc(sessionRef);
-      if (!snap.exists()) return;
+      if (!snap.exists()) return; // onSnapshot ya lo detectó o lo detectará
       const data = snap.data();
       const esAdmin = user.email === ADMIN_EMAIL;
-
+      // Admin: sincronizar deviceId en heartbeat. Usuario: solo actualizar lastActivity.
       const updateData = esAdmin
         ? { ...data, deviceId, lastActivity: serverTimestamp() }
         : { ...data, lastActivity: serverTimestamp() };
@@ -2757,6 +2915,8 @@ function limpiarUI() {
   window._authCurrentUser = null;
   licenciaActual = null;
 
+  // ── Restaurar funciones parcheadas por el modo demo ──
+  // Sin esto, el próximo usuario (cuenta paga) hereda los wrappers de bloqueo.
   if (_origMostrarCuestionarioPreDemo) {
     window.mostrarCuestionario = _origMostrarCuestionarioPreDemo;
     _origMostrarCuestionarioPreDemo = null;
@@ -2766,17 +2926,20 @@ function limpiarUI() {
     _origMostrarRespuestasExamenPreDemo = null;
   }
 
+  // ── Restaurar visualmente los ítems del menú bloqueados por demo ──
   document.querySelectorAll('li').forEach(li => {
     if (li.style.opacity === '0.4' || li.style.opacity === '0.55') {
       li.style.opacity = '';
       li.style.pointerEvents = '';
       li.title = '';
     }
-
+    // Quitar candados de respuestas correctas
     const lock = li.querySelector('.demo-lock-icon');
     if (lock) lock.remove();
   });
-
+  // CRÍTICO: recrear la Promise de licencia para el próximo login.
+  // Una Promise solo se resuelve una vez — si no se recrea, el segundo usuario
+  // (ej: pago después de demo) hereda el resultado del anterior (esDemo:true).
   window._licenciaYaVerificada = false;
   window._licenciaVerificada = new Promise(function(resolve) {
     _resolveLicenciaVerificada = resolve;
@@ -2785,9 +2948,9 @@ function limpiarUI() {
   detenerListenerSolicitudes();
   if (auth.currentUser) detenerPresencia(auth.currentUser.uid);
   detenerChat();
-
+  // Desconectar sincronización de Firestore en script.js
   if (window._setFirestoreSync) window._setFirestoreSync(null, null);
-
+  // Limpiar UID de Firebase y caché de completados para que no se mezclen con el próximo usuario
   window._firebaseUID = null;
   try {
     var _cpPrefix = 'iar_completed_v1_fs_';
@@ -2795,12 +2958,12 @@ function limpiarUI() {
       if (k.startsWith(_cpPrefix)) localStorage.removeItem(k);
     });
   } catch(_e) {}
-
+  // Resetear autorización de "Modificar Respuestas" al cerrar sesión
   _modificarAutorizado = false;
   _seccionEditorActual = null;
   _preguntasEditor = null;
   _cambiosPendientes = {};
-
+  // Cerrar panel de modificar respuestas si estaba abierto
   const modPanel = document.getElementById('modificar-respuestas-panel');
   if (modPanel) modPanel.style.display = 'none';
   const modOverlay = document.getElementById('modificar-overlay');
@@ -2810,6 +2973,8 @@ function limpiarUI() {
     if (el) el.remove();
   });
 
+  // Limpiar completamente el estado visual de la app para que el próximo login
+  // empiece desde cero: ocultar buscador, cuestionarios, submenús y limpiar búsqueda.
   const buscador = document.getElementById('buscador-preguntas');
   if (buscador) buscador.classList.add('oculto');
   const buscadorInput = document.getElementById('buscador-input');
@@ -2828,6 +2993,7 @@ function limpiarUI() {
   if (menuPrincipalEl) { menuPrincipalEl.classList.add('oculto'); menuPrincipalEl.style.display = ''; }
 }
 
+// ======== CACHÉ Y CARGA DE PREGUNTAS DESDE FIRESTORE ========
 const cachePreguntas = {};
 
 async function cargarSeccion(seccionId) {
@@ -2849,12 +3015,16 @@ async function cargarSeccion(seccionId) {
 window.cargarSeccionFirestore = cargarSeccion;
 window.mostrarModalRestriccionDemo = mostrarModalRestriccionDemo;
 
+// ======== CONTADOR DE VISITAS ÚNICAS ========
+// Registra en Firestore el primer acceso de cada usuario (una sola vez).
+// El doc "estadisticas/visitas" acumula: totalPago, totalDemo, total.
 async function registrarVisitaUnica(uid, esDemo) {
   try {
     const visitaRef = doc(db, "visitas_unicas", uid);
     const snap = await getDoc(visitaRef);
-    if (snap.exists()) return;
+    if (snap.exists()) return; // ya fue registrado antes → no contar de nuevo
 
+    // Primer acceso de este usuario: guardar marca y sumar al contador global
     await setDoc(visitaRef, { registradoEn: serverTimestamp(), esDemo: !!esDemo });
 
     const statsRef = doc(db, "estadisticas", "visitas");
@@ -2868,12 +3038,22 @@ async function registrarVisitaUnica(uid, esDemo) {
   }
 }
 
+
 onAuthStateChanged(auth, async (user) => {
   if (user) {
-
+    // ── PROTECCIÓN CONTRA RECARGA (F5 / Ctrl+R / Ctrl+F5) ──────────────────
+    // _sesionIniciadaManualmente es false al cargar la página (variable en memoria).
+    // Solo se vuelve true cuando el usuario presiona "INGRESAR AL SISTEMA" o
+    // "Crear cuenta DEMO gratis". Si es false, significa que la sesión de Firebase
+    // persistió de una visita anterior pero el usuario NO presionó el botón en
+    // esta carga de página → mostrar el login para que lo haga explícitamente.
     if (!_sesionIniciadaManualmente) {
-
+      // Recarga de página (F5): la sesión Firebase persistió pero no hubo login manual.
+      // NO mostrar login — verificar la sesión en Firestore y restaurar la página en curso.
+      // La navegación la maneja script.js usando el hash actual de la URL.
+      // (continúa con el resto del onAuthStateChanged)
     }
+    // ────────────────────────────────────────────────────────────────────────
 
     const deviceId = getDeviceId();
     try {
@@ -2883,7 +3063,8 @@ onAuthStateChanged(auth, async (user) => {
       if (!licencia.valida) {
         const emailUsuario = user.email || '';
         if (licencia.vencida) {
-
+          // NO hacemos signOut — el usuario sigue autenticado para poder enviar
+          // la solicitud de renovación. El signOut ocurre al presionar "Cerrar sesión".
           mostrarLicenciaVencida(licencia.mensaje, licencia.esDemo);
         } else {
           _limpiarTimerSimulacroIAR();
@@ -2897,7 +3078,7 @@ onAuthStateChanged(auth, async (user) => {
       const snap = await getDoc(sessionRef);
 
       if (snap.exists() && snap.data().deviceId === deviceId) {
-
+        // Proveer instancia de Firestore a script.js
         if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
         window._firebaseUID = user.uid;
         ocultarLogin(_sesionIniciadaManualmente, user.uid);
@@ -2909,7 +3090,7 @@ onAuthStateChanged(auth, async (user) => {
         registrarVisitaUnica(user.uid, licencia.esDemo);
         iniciarPresencia(user.uid, user.email);
         iniciarChat(user.email, licencia.esDemo);
-
+        // Sincronizar progreso desde Firestore al cargar sesión existente
         if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
       } else if (snap.exists() && snap.data().deviceId !== deviceId) {
         const data = snap.data();
@@ -2920,7 +3101,7 @@ onAuthStateChanged(auth, async (user) => {
 
         if (minutosInactiva >= 2) {
           await setDoc(sessionRef, { deviceId, email: user.email, loginAt: serverTimestamp(), lastActivity: serverTimestamp() });
-
+          // Proveer instancia de Firestore a script.js
           if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
           window._firebaseUID = user.uid;
           ocultarLogin(_sesionIniciadaManualmente, user.uid);
@@ -2932,7 +3113,7 @@ onAuthStateChanged(auth, async (user) => {
           registrarVisitaUnica(user.uid, licencia.esDemo);
           iniciarPresencia(user.uid, user.email);
           iniciarChat(user.email, licencia.esDemo);
-
+          // Sincronizar progreso desde Firestore (puede venir de otro dispositivo)
           if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
         } else {
           _limpiarTimerSimulacroIAR();
@@ -2941,7 +3122,7 @@ onAuthStateChanged(auth, async (user) => {
         }
       } else {
         await setDoc(sessionRef, { deviceId, email: user.email, loginAt: serverTimestamp(), lastActivity: serverTimestamp() });
-
+        // Proveer instancia de Firestore a script.js
         if (window._setFirestoreSync) window._setFirestoreSync(user.uid, db);
         window._firebaseUID = user.uid;
         ocultarLogin(_sesionIniciadaManualmente, user.uid);
@@ -2952,7 +3133,7 @@ onAuthStateChanged(auth, async (user) => {
         registrarVisitaUnica(user.uid, licencia.esDemo);
         iniciarPresencia(user.uid, user.email);
         iniciarChat(user.email, licencia.esDemo);
-
+        // Sincronizar progreso desde Firestore
         if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
       }
     } catch (err) {
@@ -2960,11 +3141,11 @@ onAuthStateChanged(auth, async (user) => {
       mostrarLogin("Error al verificar tu acceso. Intentá nuevamente.");
     }
   } else {
-
+    // No hay usuario autenticado → mostrar login
     if (monitoreoInterval) { clearInterval(monitoreoInterval); monitoreoInterval = null; }
     limpiarUI();
     mostrarLogin();
-
+    // Resolver la promesa para que script.js no quede colgado esperando
     if (!window._licenciaYaVerificada) {
       _resolveLicenciaVerificada({ esDemo: false });
       window._licenciaYaVerificada = true;
@@ -2972,21 +3153,29 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
+// ======================================================
+// ======== PRESENCIA ONLINE + CHAT EN TIEMPO REAL ========
+// ======================================================
+
 let _presenciaRef = null;
-let _chatEsUsuarioPago = true;
+let _chatEsUsuarioPago = true; // se actualiza en iniciarChat() según el tipo de licencia
 let _chatNombreUsuario = '';
 let _chatUnsubscribe = null;
 let _ultimoTsLeido = Date.now();
 
+// ── Iniciar presencia online ──
 function iniciarPresencia(uid, email) {
   const presRef = ref(rtdb, `presencia/${uid}`);
   _presenciaRef = presRef;
   const nombre = email.split('@')[0];
 
+  // Escribir presencia actual
   set(presRef, { online: true, nombre, uid, ts: Date.now() });
 
+  // Al desconectarse, marcar offline automáticamente
   onDisconnect(presRef).set({ online: false, nombre, uid, ts: Date.now() });
 
+  // Escuchar contador global y actualizar badge en barra
   const presenciaAllRef = ref(rtdb, 'presencia');
   onValue(presenciaAllRef, (snapshot) => {
     const data = snapshot.val() || {};
@@ -2996,7 +3185,7 @@ function iniciarPresencia(uid, email) {
 }
 
 function _actualizarContadorOnline(cantidad) {
-
+  // Actualizar en barra de sesión
   let badge = document.getElementById('badge-online');
   if (!badge) {
     const izq = document.getElementById('barra-sesion-izq');
@@ -3009,10 +3198,12 @@ function _actualizarContadorOnline(cantidad) {
   badge.textContent = `🟢 ${cantidad} en línea`;
   badge.className = 'badge-online-count';
 
+  // Actualizar también dentro del chat si está abierto
   const chatOnlineEl = document.getElementById('chat-online-count');
   if (chatOnlineEl) chatOnlineEl.textContent = `🟢 ${cantidad} en línea`;
 }
 
+// ── Detener presencia al cerrar sesión ──
 function detenerPresencia(uid) {
   if (_presenciaRef) {
     set(_presenciaRef, { online: false, nombre: '', uid, ts: Date.now() });
@@ -3020,12 +3211,18 @@ function detenerPresencia(uid) {
   }
 }
 
+// ──────────────────────────────────────────────────────
+// ── CHAT ──────────────────────────────────────────────
+// ──────────────────────────────────────────────────────
+
 function iniciarChat(email, esDemo) {
-  _chatEsUsuarioPago = !esDemo;
+  _chatEsUsuarioPago = !esDemo; // solo usuarios de pago pueden escribir
   _chatNombreUsuario = email.split('@')[0];
   _inyectarBotonChat();
 }
 
+// Mostrar/ocultar chat según si estamos en el menú principal
+// Se llama explícitamente desde showMenu() y showSection() via window.chatMostrarEnMenu
 function _actualizarVisibilidadChat(enMenu) {
   const btn = document.getElementById('btn-chat-flotante');
   const ventana = document.getElementById('chat-ventana');
@@ -3036,6 +3233,7 @@ function _actualizarVisibilidadChat(enMenu) {
   }
 }
 
+// Hook global: script.js llama window.chatMostrarEnMenu(true/false) al navegar
 window.chatMostrarEnMenu = function(enMenu) {
   _actualizarVisibilidadChat(enMenu);
 };
@@ -3043,6 +3241,7 @@ window.chatMostrarEnMenu = function(enMenu) {
 function _inyectarBotonChat() {
   if (document.getElementById('btn-chat-flotante')) return;
 
+  // Botón flotante
   const btn = document.createElement('button');
   btn.id = 'btn-chat-flotante';
   btn.innerHTML = '💬';
@@ -3051,18 +3250,21 @@ function _inyectarBotonChat() {
   btn.addEventListener('click', () => _toggleChat());
   document.body.appendChild(btn);
 
+  // Estado inicial: mostrar solo si estamos en el menú
   const hashInicial = window.location.hash;
   const enMenuInicial = hashInicial === '' || hashInicial === '#' || hashInicial === '#menu';
   _actualizarVisibilidadChat(enMenuInicial);
 
+  // Respaldo: escuchar hashchange para navegación con botón atrás/adelante del browser
   window.addEventListener('hashchange', () => {
     const h = window.location.hash;
     _actualizarVisibilidadChat(h === '' || h === '#' || h === '#menu');
   });
 
+  // Ventana del chat
   const ventana = document.createElement('div');
   ventana.id = 'chat-ventana';
-
+  // Área de input: diferente según si el usuario es de pago o demo
   const inputAreaHTML = _chatEsUsuarioPago
     ? `<div id="chat-input-area">
         <input id="chat-input" type="text" placeholder="Escribí tu mensaje..." maxlength="300" autocomplete="off" />
@@ -3100,12 +3302,14 @@ function _inyectarBotonChat() {
 
   document.getElementById('chat-cerrar').addEventListener('click', () => _toggleChat(false));
 
+  // Solo conectar eventos de envío si el usuario tiene acceso completo
   if (_chatEsUsuarioPago) {
     const input = document.getElementById('chat-input');
     document.getElementById('chat-enviar').addEventListener('click', _enviarMensaje);
     input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _enviarMensaje(); } });
   }
 
+  // Suscribir a mensajes en tiempo real (últimos 50 ordenados por timestamp)
   const mensajesRef = rtQuery(ref(rtdb, 'chat/mensajes'), orderByChild('ts'), limitToLast(200));
   
   _chatUnsubscribe = onValue(mensajesRef, (snapshot) => {
@@ -3144,10 +3348,10 @@ function _toggleChat(forzarEstado) {
     ventana.classList.add('chat-visible');
     btn.classList.add('chat-abierto');
     btn.innerHTML = '✕';
-
+    // Scroll al final
     const msgs = document.getElementById('chat-mensajes');
     if (msgs) setTimeout(() => { msgs.scrollTop = msgs.scrollHeight; }, 100);
-
+    // Limpiar badge y marcar mensajes como leídos
     _ultimoTsLeido = Date.now();
     btn.removeAttribute('data-nuevos');
   } else {
@@ -3175,6 +3379,7 @@ function _renderMensajes(msgs) {
     const fechaStr = fecha ? fecha.toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit' }) : '';
     const horaStr = fecha ? fecha.toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' }) : '';
 
+    // Separador de fecha
     if (fechaStr && fechaStr !== lastFecha) {
       const sep = document.createElement('div');
       sep.className = 'chat-fecha-sep';
@@ -3208,18 +3413,19 @@ function _renderMensajes(msgs) {
 
   if (estabaAbajo) container.scrollTop = container.scrollHeight;
 
+  // Badge: si el chat está abierto, marcar todo como leído automáticamente
   const ventana = document.getElementById('chat-ventana');
   const btn = document.getElementById('btn-chat-flotante');
   if (btn && ventana) {
     if (ventana.classList.contains('chat-visible')) {
-
+      // Chat abierto → actualizar _ultimoTsLeido con el mensaje más reciente
       if (msgs.length > 0) {
         const tsMax = Math.max(...msgs.map(m => m.ts || 0));
         if (tsMax > _ultimoTsLeido) _ultimoTsLeido = tsMax;
       }
       btn.removeAttribute('data-nuevos');
     } else {
-
+      // Chat cerrado → mostrar cantidad de no leídos
       const noLeidos = msgs.filter(m => m.ts && m.nombre !== _chatNombreUsuario && m.ts > _ultimoTsLeido).length;
       if (noLeidos > 0) {
         btn.setAttribute('data-nuevos', noLeidos > 99 ? '99+' : String(noLeidos));
@@ -3231,7 +3437,7 @@ function _renderMensajes(msgs) {
 }
 
 async function _enviarMensaje() {
-
+  // Bloqueo de seguridad: usuarios demo no pueden enviar mensajes
   if (!_chatEsUsuarioPago) return;
   const input = document.getElementById('chat-input');
   const btnEnviar = document.getElementById('chat-enviar');
@@ -3248,8 +3454,8 @@ async function _enviarMensaje() {
     });
   } catch(err) {
     console.warn('[IAR Chat] Error al enviar:', err.code, err.message);
-    input.value = texto;
-
+    input.value = texto; // restaurar si falla
+    // Mostrar error visible en el chat
     const container = document.getElementById('chat-mensajes');
     if (container) {
       const errEl = document.createElement('div');
@@ -3272,6 +3478,10 @@ function detenerChat() {
   if (v) v.remove();
   if (b) b.remove();
 }
+
+// ======================================================================
+// MÓDULO 14 — MODIFICAR RESPUESTAS (Solo Admin)
+// ======================================================================
 
 let _modificarAutorizado = false;
 let _seccionEditorActual = null;
@@ -3340,6 +3550,7 @@ function _inyectarEstilosModificar() {
   document.head.appendChild(s);
 }
 
+// ── Modal de contraseña — busca la clave en Firestore ANTES de mostrar el modal ──
 async function _mostrarModalContrasena(callback) {
   let passwordCorrecta = null;
   try {
@@ -3360,6 +3571,7 @@ async function _mostrarModalContrasena(callback) {
     return;
   }
 
+  // Recién acá mostramos el modal, con la contraseña ya cargada en memoria
   _inyectarEstilosModificar();
   const overlay = document.createElement('div');
   overlay.id = 'mod-pass-overlay';
@@ -3415,6 +3627,7 @@ async function _mostrarModalContrasena(callback) {
   setTimeout(() => input.focus(), 100);
 }
 
+// ── Mostrar panel Modificar Respuestas ──
 window.mostrarModificarRespuestas = function() {
   if (!window._esAdmin) return;
   if (_modificarAutorizado) { _abrirPanelModificar(); return; }
@@ -3666,21 +3879,23 @@ function _mostrarConfirmacionGuardar(qIdx, onAceptar) {
   document.getElementById('mod-confirm-aceptar').addEventListener('click', () => { overlay.remove(); onAceptar(); });
 }
 
+// Agregar ítem de menú para admin al mostrar la barra
 const _origMostrarBarraSesion = mostrarBarraSesion;
 
+// Reset autorización al cerrar sesión
 onAuthStateChanged(auth, user => {
   if (!user) {
     _modificarAutorizado = false;
     _seccionEditorActual = null;
     _preguntasEditor = null;
     _cambiosPendientes = {};
-
+    // Cerrar panel de modificar si estaba abierto (ambos posibles IDs)
     const modOverlay = document.getElementById('modificar-overlay');
     if (modOverlay) modOverlay.remove();
     const modPanel = document.getElementById('modificar-respuestas-panel');
     if (modPanel) modPanel.style.display = 'none';
-
+    // Asegurar que el menú principal aparezca al re-ingresar
+    // (se hace en ocultarLogin -> navegarAMenu, pero como fallback aquí también)
   }
 });
-
 
