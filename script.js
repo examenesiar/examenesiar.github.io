@@ -1,4 +1,4 @@
-
+//Scritp V1
 if (typeof preguntasPorSeccion === 'undefined') {
   var preguntasPorSeccion = {};
 }
@@ -640,9 +640,6 @@ function getImagenUrl(path) {
     document.querySelectorAll(".menu-principal[id$='-submenu']").forEach(s => s.style.display = "none");
     document.querySelectorAll(".pagina-cuestionario").forEach(p => p.classList.remove("activa"));
 
-    // Notificar al chat que salimos del menú (ocultar botón 💬)
-    if (typeof window.chatMostrarEnMenu === 'function') window.chatMostrarEnMenu(false);
-
     navBarModo = 'normal';
     renderNavBar();
 
@@ -764,8 +761,6 @@ function getImagenUrl(path) {
       if (_stSim) _stSim.style.display = 'none';
       document.getElementById("menu-principal")?.classList.remove("oculto");
       restoreScrollPosition();
-      // Notificar al chat que estamos en el menú (mostrar botón 💬)
-      if (typeof window.chatMostrarEnMenu === 'function') window.chatMostrarEnMenu(true);
       return;
     }
     
@@ -819,9 +814,6 @@ function getImagenUrl(path) {
     if (window.location.hash !== '#menu') {
       history.replaceState({ section: null }, 'Menú Principal', '#menu');
     }
-
-    // Notificar al chat que estamos en el menú (mostrar botón 💬)
-    if (typeof window.chatMostrarEnMenu === 'function') window.chatMostrarEnMenu(true);
 
     restoreScrollPosition();
   }
