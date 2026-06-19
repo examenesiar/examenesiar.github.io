@@ -1,4 +1,4 @@
-/* ========== firebase-auth.js ==========
+/* ========== firebase-auth.js V1==========
    Sistema de autenticación con Firebase
    - Login con email y contraseña
    - Sesión única por dispositivo
@@ -11,7 +11,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, si
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, deleteDoc, serverTimestamp, collection, addDoc, Timestamp, increment, updateDoc, onSnapshot, query, where }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getDatabase, ref, set, onValue, onDisconnect, push, query as rtQuery, limitToLast, orderByChild, serverTimestamp as rtServerTimestamp, remove }
+import { getDatabase, ref, set, onValue, onDisconnect }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
 const firebaseConfig = {
@@ -1429,7 +1429,6 @@ function ocultarLogin(navegarAMenu = false, uid = null) {
           menuPrincipal.classList.remove("oculto");
           menuPrincipal.style.display = "";
         }
-        if (typeof window.chatMostrarEnMenu === 'function') window.chatMostrarEnMenu(true);
       }, 150);
     };
     mostrarBienvenidaSiCorresponde(uid, fnIrAlMenu);
@@ -1740,6 +1739,7 @@ function mostrarBarraSesion(email, licencia) {
   window._esAdmin = (email === ADMIN_EMAIL);
   // Exponer DB y usuario para el módulo de comentarios (integrado en script_onebyone.js)
   window._firestoreDB_comentarios = db;
+  window._rtdbInstance = rtdb;
   window._authCurrentUser = auth.currentUser;
 
   // Mostrar u ocultar el ítem "Ver Respuestas Correctas" del menú según si es admin
@@ -2002,15 +2002,6 @@ async function mostrarPanelAdmin() {
           <span id="admin-limpiar-msg" style="font-size:.78rem;color:#64748b;"></span>
         </div>
         <div id="admin-usuarios"><em style="color:#94a3b8;font-size:.85rem;">Cargando...</em></div>
-      </div>
-
-      <!-- Administrar Chat -->
-      <div class="admin-seccion" style="border-top:2px solid #fee2e2;padding-top:16px;margin-top:4px;">
-        <h3 style="color:#dc2626;">🗑️ Administrar Chat</h3>
-        <p style="font-size:.82rem;color:#64748b;margin-bottom:10px;">Borra permanentemente todos los mensajes del chat global.</p>
-        <button class="admin-btn" style="background:#dc2626;color:white;font-size:.82rem;padding:7px 16px;" onclick="window.borrarTodosLosChats()">
-          🗑️ Borrar todos los mensajes del chat
-        </button>
       </div>
 
       <!-- Publicar actualización de preguntas -->
@@ -2561,21 +2552,6 @@ window.limpiarVencidosAdmin = async function() {
   } catch(err) { if (msgEl) msgEl.textContent = "Error: " + (err.message || err); }
 };
 
-// ── Borrar todos los chats ────────────────────────────────────────────────
-window.borrarTodosLosChats = async function() {
-  if (!confirm("¿Borrar TODOS los mensajes del chat?\n\nEsta acción no se puede deshacer.")) return;
-  try {
-    const { remove: rtRemove } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
-    await rtRemove(ref(rtdb, 'chat/mensajes'));
-    // Clear local welcome flag so it shows again
-    localStorage.removeItem('iar_chat_welcome_shown_v1');
-    // Re-render chat if open
-    const container = document.getElementById('chat-mensajes');
-    if (container) container.innerHTML = '<div class="chat-vacio">Chat limpiado. ¡Sé el primero en escribir!</div>';
-    alert("✅ Todos los mensajes del chat fueron eliminados.");
-  } catch(err) { alert("Error al borrar chat: " + (err.message || err)); }
-};
-
 // ======== LOGOUT ========
 // Muestra el diálogo de confirmación y llama a handleLogout si acepta
 window._confirmarCierreSesion = function() {
@@ -3072,7 +3048,6 @@ function limpiarUI() {
   detenerListenersActividad();
   detenerListenerSolicitudes();
   if (auth.currentUser) detenerPresencia(auth.currentUser.uid);
-  detenerChat();
   // Desconectar sincronización de Firestore en script.js
   if (window._setFirestoreSync) window._setFirestoreSync(null, null);
   // Limpiar UID de Firebase y caché de completados para que no se mezclen con el próximo usuario
@@ -3317,7 +3292,6 @@ onAuthStateChanged(auth, async (user) => {
         iniciarCountdownLicencia(licencia);
         registrarVisitaUnica(user.uid, licencia.esDemo);
         iniciarPresencia(user.uid, user.email);
-        iniciarChat(user.email, licencia.esDemo);
         // Sincronizar progreso desde Firestore al cargar sesión existente
         if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
       } else if (snap.exists() && snap.data().deviceId !== deviceId) {
@@ -3341,7 +3315,6 @@ onAuthStateChanged(auth, async (user) => {
           iniciarCountdownLicencia(licencia);
           registrarVisitaUnica(user.uid, licencia.esDemo);
           iniciarPresencia(user.uid, user.email);
-          iniciarChat(user.email, licencia.esDemo);
           // Sincronizar progreso desde Firestore (puede venir de otro dispositivo)
           if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
         } else {
@@ -3361,7 +3334,6 @@ onAuthStateChanged(auth, async (user) => {
         iniciarCountdownLicencia(licencia);
         registrarVisitaUnica(user.uid, licencia.esDemo);
         iniciarPresencia(user.uid, user.email);
-        iniciarChat(user.email, licencia.esDemo);
         // Sincronizar progreso desde Firestore
         if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
       }
@@ -3383,14 +3355,10 @@ onAuthStateChanged(auth, async (user) => {
 });
 
 // ======================================================
-// ======== PRESENCIA ONLINE + CHAT EN TIEMPO REAL ========
+// ======== PRESENCIA ONLINE ========
 // ======================================================
 
 let _presenciaRef = null;
-let _chatEsUsuarioPago = true; // se actualiza en iniciarChat() según el tipo de licencia
-let _chatNombreUsuario = '';
-let _chatUnsubscribe = null;
-let _ultimoTsLeido = Date.now();
 
 // ── Iniciar presencia online ──
 function iniciarPresencia(uid, email) {
@@ -3426,10 +3394,6 @@ function _actualizarContadorOnline(cantidad) {
   }
   badge.textContent = `🟢 ${cantidad} en línea`;
   badge.className = 'badge-online-count';
-
-  // Actualizar también dentro del chat si está abierto
-  const chatOnlineEl = document.getElementById('chat-online-count');
-  if (chatOnlineEl) chatOnlineEl.textContent = `🟢 ${cantidad} en línea`;
 }
 
 // ── Detener presencia al cerrar sesión ──
@@ -3440,273 +3404,7 @@ function detenerPresencia(uid) {
   }
 }
 
-// ──────────────────────────────────────────────────────
-// ── CHAT ──────────────────────────────────────────────
-// ──────────────────────────────────────────────────────
-
-function iniciarChat(email, esDemo) {
-  _chatEsUsuarioPago = !esDemo; // solo usuarios de pago pueden escribir
-  _chatNombreUsuario = email.split('@')[0];
-  _inyectarBotonChat();
-}
-
-// Mostrar/ocultar chat según si estamos en el menú principal
-// Se llama explícitamente desde showMenu() y showSection() via window.chatMostrarEnMenu
-function _actualizarVisibilidadChat(enMenu) {
-  const btn = document.getElementById('btn-chat-flotante');
-  const ventana = document.getElementById('chat-ventana');
-  if (btn) btn.style.display = enMenu ? '' : 'none';
-  if (!enMenu && ventana) {
-    ventana.classList.remove('chat-visible');
-    if (btn) { btn.classList.remove('chat-abierto'); btn.innerHTML = '💬'; }
-  }
-}
-
-// Hook global: script.js llama window.chatMostrarEnMenu(true/false) al navegar
-window.chatMostrarEnMenu = function(enMenu) {
-  _actualizarVisibilidadChat(enMenu);
-};
-
-function _inyectarBotonChat() {
-  if (document.getElementById('btn-chat-flotante')) return;
-
-  // Botón flotante
-  const btn = document.createElement('button');
-  btn.id = 'btn-chat-flotante';
-  btn.innerHTML = '💬';
-  btn.title = 'Chat de estudiantes';
-  btn.setAttribute('aria-label', 'Abrir chat');
-  btn.addEventListener('click', () => _toggleChat());
-  document.body.appendChild(btn);
-
-  // Estado inicial: mostrar solo si estamos en el menú
-  const hashInicial = window.location.hash;
-  const enMenuInicial = hashInicial === '' || hashInicial === '#' || hashInicial === '#menu';
-  _actualizarVisibilidadChat(enMenuInicial);
-
-  // Respaldo: escuchar hashchange para navegación con botón atrás/adelante del browser
-  window.addEventListener('hashchange', () => {
-    const h = window.location.hash;
-    _actualizarVisibilidadChat(h === '' || h === '#' || h === '#menu');
-  });
-
-  // Ventana del chat
-  const ventana = document.createElement('div');
-  ventana.id = 'chat-ventana';
-  // Área de input: diferente según si el usuario es de pago o demo
-  const inputAreaHTML = _chatEsUsuarioPago
-    ? `<div id="chat-input-area">
-        <input id="chat-input" type="text" placeholder="Escribí tu mensaje..." maxlength="300" autocomplete="off" />
-        <button id="chat-enviar">➤</button>
-       </div>`
-    : `<div id="chat-input-area" id="chat-input-area-demo" style="
-        background:linear-gradient(135deg,#1e3a8a 0%,#1a56a0 100%);
-        padding:10px 14px; display:flex; align-items:center; gap:10px;
-        border-top:1px solid rgba(255,255,255,0.08);">
-        <div style="
-          flex:1; display:flex; align-items:center; gap:9px;
-          background:rgba(255,255,255,0.07);
-          border:1px solid rgba(255,255,255,0.15);
-          border-radius:8px; padding:9px 13px;">
-          <span style="font-size:1rem; flex-shrink:0;">🔒</span>
-          <span style="font-size:.78rem; color:rgba(255,255,255,0.82); line-height:1.4; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-            <strong style="color:#93c5fd; font-size:.8rem;">Chat exclusivo para usuarios con acceso completo.</strong><br>
-            Adquirí tu plan para participar.
-          </span>
-        </div>
-       </div>`;
-
-  ventana.innerHTML = `
-    <div id="chat-header">
-      <div style="display:flex;flex-direction:column;gap:2px;">
-        <span style="font-weight:700;font-size:.95rem;">💬 Chat IAR</span>
-        <span id="chat-online-count" style="font-size:.72rem;opacity:.85;">🟢 cargando...</span>
-      </div>
-      <button id="chat-cerrar" title="Cerrar chat">✕</button>
-    </div>
-    <div id="chat-mensajes"></div>
-    ${inputAreaHTML}
-  `;
-  document.body.appendChild(ventana);
-
-  document.getElementById('chat-cerrar').addEventListener('click', () => _toggleChat(false));
-
-  // Solo conectar eventos de envío si el usuario tiene acceso completo
-  if (_chatEsUsuarioPago) {
-    const input = document.getElementById('chat-input');
-    document.getElementById('chat-enviar').addEventListener('click', _enviarMensaje);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _enviarMensaje(); } });
-  }
-
-  // Suscribir a mensajes en tiempo real (últimos 50 ordenados por timestamp)
-  const mensajesRef = rtQuery(ref(rtdb, 'chat/mensajes'), orderByChild('ts'), limitToLast(200));
-  
-  _chatUnsubscribe = onValue(mensajesRef, (snapshot) => {
-    const msgs = [];
-    snapshot.forEach(child => {
-      const val = child.val();
-      if (val && val.texto) msgs.push({ id: child.key, ...val });
-    });
-    _renderMensajes(msgs);
-    const onlineEl = document.getElementById('chat-online-count');
-    if (onlineEl && (onlineEl.textContent.includes('cargando') || onlineEl.textContent.includes('error'))) {
-      onlineEl.textContent = '🟢 conectado';
-    }
-  }, (error) => {
-    console.warn('[IAR Chat] Error en suscripción:', error.code, error.message);
-    const onlineEl = document.getElementById('chat-online-count');
-    if (onlineEl) onlineEl.textContent = '🔴 Error de conexión';
-    const container = document.getElementById('chat-mensajes');
-    if (container) {
-      container.innerHTML = `<div class="chat-vacio" style="color:#dc2626;font-size:.82rem;padding:16px;">
-        ⚠️ No se puede conectar al chat.<br><br>
-        Verificá tu conexión a internet.<br><br>
-        <small>Error: ${error.code || error.message}</small>
-      </div>`;
-    }
-  });
-}
-
-function _toggleChat(forzarEstado) {
-  const ventana = document.getElementById('chat-ventana');
-  const btn = document.getElementById('btn-chat-flotante');
-  if (!ventana) return;
-  const visible = ventana.classList.contains('chat-visible');
-  const abrir = forzarEstado !== undefined ? forzarEstado : !visible;
-  if (abrir) {
-    ventana.classList.add('chat-visible');
-    btn.classList.add('chat-abierto');
-    btn.innerHTML = '✕';
-    // Scroll al final
-    const msgs = document.getElementById('chat-mensajes');
-    if (msgs) setTimeout(() => { msgs.scrollTop = msgs.scrollHeight; }, 100);
-    // Limpiar badge y marcar mensajes como leídos
-    _ultimoTsLeido = Date.now();
-    btn.removeAttribute('data-nuevos');
-  } else {
-    ventana.classList.remove('chat-visible');
-    btn.classList.remove('chat-abierto');
-    btn.innerHTML = '💬';
-  }
-}
-
-function _renderMensajes(msgs) {
-  const container = document.getElementById('chat-mensajes');
-  if (!container) return;
-  const estabaAbajo = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
-
-  container.innerHTML = '';
-  if (msgs.length === 0) {
-    container.innerHTML = '<div class="chat-vacio">Todavía no hay mensajes. ¡Sé el primero en escribir!</div>';
-    return;
-  }
-
-  let lastFecha = '';
-  msgs.forEach(msg => {
-    const esPropio = msg.nombre === _chatNombreUsuario;
-    const fecha = msg.ts ? new Date(msg.ts) : null;
-    const fechaStr = fecha ? fecha.toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit' }) : '';
-    const horaStr = fecha ? fecha.toLocaleTimeString('es-AR', { hour:'2-digit', minute:'2-digit' }) : '';
-
-    // Separador de fecha
-    if (fechaStr && fechaStr !== lastFecha) {
-      const sep = document.createElement('div');
-      sep.className = 'chat-fecha-sep';
-      sep.textContent = fechaStr;
-      container.appendChild(sep);
-      lastFecha = fechaStr;
-    }
-
-    const burbuja = document.createElement('div');
-    burbuja.className = 'chat-msg' + (esPropio ? ' chat-msg-propio' : ' chat-msg-otro');
-
-    if (!esPropio) {
-      const nombreEl = document.createElement('span');
-      nombreEl.className = 'chat-nombre';
-      nombreEl.textContent = msg.nombre || 'Anónimo';
-      burbuja.appendChild(nombreEl);
-    }
-
-    const textoEl = document.createElement('span');
-    textoEl.className = 'chat-texto';
-    textoEl.textContent = msg.texto;
-    burbuja.appendChild(textoEl);
-
-    const horaEl = document.createElement('span');
-    horaEl.className = 'chat-hora';
-    horaEl.textContent = horaStr;
-    burbuja.appendChild(horaEl);
-
-    container.appendChild(burbuja);
-  });
-
-  if (estabaAbajo) container.scrollTop = container.scrollHeight;
-
-  // Badge: si el chat está abierto, marcar todo como leído automáticamente
-  const ventana = document.getElementById('chat-ventana');
-  const btn = document.getElementById('btn-chat-flotante');
-  if (btn && ventana) {
-    if (ventana.classList.contains('chat-visible')) {
-      // Chat abierto → actualizar _ultimoTsLeido con el mensaje más reciente
-      if (msgs.length > 0) {
-        const tsMax = Math.max(...msgs.map(m => m.ts || 0));
-        if (tsMax > _ultimoTsLeido) _ultimoTsLeido = tsMax;
-      }
-      btn.removeAttribute('data-nuevos');
-    } else {
-      // Chat cerrado → mostrar cantidad de no leídos
-      const noLeidos = msgs.filter(m => m.ts && m.nombre !== _chatNombreUsuario && m.ts > _ultimoTsLeido).length;
-      if (noLeidos > 0) {
-        btn.setAttribute('data-nuevos', noLeidos > 99 ? '99+' : String(noLeidos));
-      } else {
-        btn.removeAttribute('data-nuevos');
-      }
-    }
-  }
-}
-
-async function _enviarMensaje() {
-  // Bloqueo de seguridad: usuarios demo no pueden enviar mensajes
-  if (!_chatEsUsuarioPago) return;
-  const input = document.getElementById('chat-input');
-  const btnEnviar = document.getElementById('chat-enviar');
-  if (!input) return;
-  const texto = input.value.trim();
-  if (!texto) return;
-  input.value = '';
-  if (btnEnviar) btnEnviar.disabled = true;
-  try {
-    await push(ref(rtdb, 'chat/mensajes'), {
-      nombre: _chatNombreUsuario,
-      texto,
-      ts: Date.now()
-    });
-  } catch(err) {
-    console.warn('[IAR Chat] Error al enviar:', err.code, err.message);
-    input.value = texto; // restaurar si falla
-    // Mostrar error visible en el chat
-    const container = document.getElementById('chat-mensajes');
-    if (container) {
-      const errEl = document.createElement('div');
-      errEl.style.cssText = 'color:#dc2626;font-size:.75rem;text-align:center;padding:4px 8px;background:#fee2e2;border-radius:6px;margin:4px 8px;';
-      errEl.textContent = '⚠️ No se pudo enviar. Error: ' + (err.code || err.message);
-      container.appendChild(errEl);
-      container.scrollTop = container.scrollHeight;
-      setTimeout(() => errEl.remove(), 5000);
-    }
-  } finally {
-    if (btnEnviar) btnEnviar.disabled = false;
-    if (input) input.focus();
-  }
-}
-
-function detenerChat() {
-  if (_chatUnsubscribe) { _chatUnsubscribe(); _chatUnsubscribe = null; }
-  const v = document.getElementById('chat-ventana');
-  const b = document.getElementById('btn-chat-flotante');
-  if (v) v.remove();
-  if (b) b.remove();
-}
+// (Módulo de chat eliminado — se mantiene solo la presencia online arriba)
 
 // ======================================================================
 // MÓDULO 14 — MODIFICAR RESPUESTAS (Solo Admin)
