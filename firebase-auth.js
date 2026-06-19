@@ -1,4 +1,4 @@
-/* ========== firebase-auth.js V1==========
+/* ========== firebase-auth.js V2==========
    Sistema de autenticación con Firebase
    - Login con email y contraseña
    - Sesión única por dispositivo
@@ -3292,6 +3292,7 @@ onAuthStateChanged(auth, async (user) => {
         iniciarCountdownLicencia(licencia);
         registrarVisitaUnica(user.uid, licencia.esDemo);
         iniciarPresencia(user.uid, user.email);
+        iniciarNotificacionesComentarios();
         // Sincronizar progreso desde Firestore al cargar sesión existente
         if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
       } else if (snap.exists() && snap.data().deviceId !== deviceId) {
@@ -3315,6 +3316,7 @@ onAuthStateChanged(auth, async (user) => {
           iniciarCountdownLicencia(licencia);
           registrarVisitaUnica(user.uid, licencia.esDemo);
           iniciarPresencia(user.uid, user.email);
+        iniciarNotificacionesComentarios();
           // Sincronizar progreso desde Firestore (puede venir de otro dispositivo)
           if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
         } else {
@@ -3334,6 +3336,7 @@ onAuthStateChanged(auth, async (user) => {
         iniciarCountdownLicencia(licencia);
         registrarVisitaUnica(user.uid, licencia.esDemo);
         iniciarPresencia(user.uid, user.email);
+        iniciarNotificacionesComentarios();
         // Sincronizar progreso desde Firestore
         if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
       }
@@ -3394,6 +3397,87 @@ function _actualizarContadorOnline(cantidad) {
   }
   badge.textContent = `🟢 ${cantidad} en línea`;
   badge.className = 'badge-online-count';
+}
+
+// ======================================================
+// ======== NOTIFICACIONES DE COMENTARIOS (Admin) ========
+// ======================================================
+let _notifComentariosUnsub = null;
+
+function iniciarNotificacionesComentarios() {
+  if (!window._esAdmin) return; // solo corre para el admin
+  import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js")
+    .then(({ collection, query, where, orderBy, onSnapshot, doc, updateDoc }) => {
+      const q = query(
+        collection(db, 'notificaciones_admin'),
+        where('leido', '==', false),
+        orderBy('ts', 'desc')
+      );
+      if (_notifComentariosUnsub) _notifComentariosUnsub();
+      _notifComentariosUnsub = onSnapshot(q, (snap) => {
+        const items = [];
+        snap.forEach(d => items.push({ id: d.id, ...d.data() }));
+        _renderBellNotificaciones(items, updateDoc, doc);
+      });
+    });
+}
+
+function _renderBellNotificaciones(items, updateDoc, docFn) {
+  const izq = document.getElementById('barra-sesion-izq');
+  if (!izq) return;
+  let bell = document.getElementById('bell-notif-comentarios');
+  if (!bell) {
+    bell = document.createElement('span');
+    bell.id = 'bell-notif-comentarios';
+    bell.style.cssText = 'cursor:pointer;position:relative;margin-left:10px;font-size:1.1rem;';
+    izq.appendChild(bell);
+  }
+  bell.innerHTML = `🔔${items.length ? `<span style="position:absolute;top:-6px;right:-8px;background:#dc2626;color:#fff;border-radius:50%;font-size:.65rem;padding:1px 5px;font-weight:700;">${items.length}</span>` : ''}`;
+
+  bell.onclick = () => {
+    const existente = document.getElementById('panel-notif-comentarios');
+    if (existente) { existente.remove(); return; }
+
+    const panel = document.createElement('div');
+    panel.id = 'panel-notif-comentarios';
+    panel.style.cssText = 'position:fixed;bottom:48px;left:10px;background:#fff;border:1px solid #cbd5e1;' +
+      'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);max-width:340px;max-height:400px;' +
+      'overflow-y:auto;z-index:999999;padding:8px;';
+
+    panel.innerHTML = items.length
+      ? items.map(it => `
+        <div class="notif-item" data-id="${it.id}" data-seccion="${it.seccionId}" data-mensaje="${it.mensajeId}"
+          style="padding:9px 10px;border-bottom:1px solid #f1f5f9;cursor:pointer;">
+          <div style="font-weight:700;font-size:.82rem;color:#1e3a8a;">
+            ${it.nombre || 'Usuario'} ${it.parentId ? '<span style="color:#94a3b8;">(respuesta)</span>' : ''}
+          </div>
+          <div style="font-size:.78rem;color:#475569;margin-top:2px;">
+            ${(it.texto || '').slice(0, 90)}${(it.texto || '').length > 90 ? '…' : ''}
+          </div>
+          <div style="font-size:.7rem;color:#94a3b8;margin-top:2px;">en ${it.seccionId}</div>
+        </div>`).join('')
+      : '<div style="padding:14px;font-size:.85rem;color:#94a3b8;">Sin comentarios nuevos.</div>';
+
+    document.body.appendChild(panel);
+
+    panel.querySelectorAll('.notif-item').forEach(el => {
+      el.addEventListener('click', async () => {
+        const { seccion, mensaje, id } = el.dataset;
+        try { await updateDoc(docFn(db, 'notificaciones_admin', id), { leido: true }); } catch (e) {}
+        panel.remove();
+        if (typeof window.irAComentario === 'function') window.irAComentario(seccion, mensaje);
+      });
+    });
+
+    setTimeout(() => {
+      document.addEventListener('click', function cerrar(ev) {
+        if (!panel.contains(ev.target) && ev.target !== bell) {
+          panel.remove();
+          document.removeEventListener('click', cerrar);
+        }
+      });
+    }, 0);
+  };
 }
 
 // ── Detener presencia al cerrar sesión ──
