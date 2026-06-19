@@ -661,6 +661,7 @@ async function handleRegistro() {
     aplicarRestriccionesDemo();
     _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
     mostrarBarraSesion(user.email, licencia);
+    iniciarCacheVersion();
     iniciarMonitoreoSesion(user);
     iniciarCountdownLicencia(licencia);
 
@@ -1365,6 +1366,7 @@ async function handleLogin() {
     if (licencia.esDemo) aplicarRestriccionesDemo();
     _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
     mostrarBarraSesion(user.email, licencia);
+    iniciarCacheVersion();
     iniciarMonitoreoSesion(user);
     iniciarCountdownLicencia(licencia);
 
@@ -2010,6 +2012,29 @@ async function mostrarPanelAdmin() {
           🗑️ Borrar todos los mensajes del chat
         </button>
       </div>
+
+      <!-- Publicar actualización de preguntas -->
+      <div class="admin-seccion" style="border-top:2px solid #d1fae5;padding-top:16px;margin-top:4px;">
+        <h3 style="color:#059669;">📦 Publicar actualización de preguntas</h3>
+        <p style="font-size:.82rem;color:#64748b;margin-bottom:10px;">
+          Al publicar, se incrementa la versión en Firestore y todos los usuarios con el sitio abierto
+          invalidan su caché automáticamente. Los que recarguen también descargarán las preguntas nuevas.
+        </p>
+        <div id="admin-version-info" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:.85rem;">
+          <em style="color:#94a3b8;">Cargando versión actual...</em>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:.78rem;font-weight:600;color:#64748b;display:block;margin-bottom:4px;text-transform:uppercase;">Nota opcional (ej: "Agregados exámenes Feb 2026")</label>
+          <input type="text" id="admin-version-nota" placeholder="Descripción de los cambios..." maxlength="200"
+            style="width:100%;padding:8px 10px;border:1.5px solid #cbd5e1;border-radius:7px;font-size:.88rem;color:#1f2937;outline:none;box-sizing:border-box;" />
+        </div>
+        <button class="admin-btn admin-btn-success" id="admin-btn-publicar-version" style="font-size:.88rem;padding:10px 20px;">
+          🚀 Publicar actualización
+        </button>
+        <div id="admin-version-msg" class="admin-msg" style="display:none;margin-top:8px;"></div>
+        <div id="admin-version-historial" style="margin-top:14px;"></div>
+      </div>
+
     </div>
   `;
   document.body.appendChild(overlay);
@@ -2172,11 +2197,111 @@ async function cargarDatosAdmin() {
       html += '</tbody></table></div>';
       usrDiv.innerHTML = html;
     }
+
+    // ── Versión de preguntas ──────────────────────────────────────────────
+    await _cargarSeccionVersionAdmin();
+
   } catch(err) {
     console.error("Error cargando datos admin:", err);
     if (solNuevosDiv) solNuevosDiv.innerHTML = '<em style="color:#dc2626;">Error al cargar datos.</em>';
   }
 }
+
+// ── Versión de preguntas — panel admin ───────────────────────────────────
+
+async function _cargarSeccionVersionAdmin() {
+  const infoDiv = document.getElementById('admin-version-info');
+  const histDiv = document.getElementById('admin-version-historial');
+  const btn = document.getElementById('admin-btn-publicar-version');
+  if (!infoDiv || !btn) return;
+
+  try {
+    const vSnap = await getDoc(doc(db, 'config', 'version_preguntas'));
+    let versionActual = 0;
+    let historial = [];
+
+    if (vSnap.exists()) {
+      const d = vSnap.data();
+      versionActual = d.version || 0;
+      historial = d.historial || [];
+      const fecha = d.fecha ? (d.fecha.toDate ? d.fecha.toDate() : new Date(d.fecha)) : null;
+      const fechaStr = fecha
+        ? fecha.toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })
+        : '—';
+      infoDiv.innerHTML = `<strong style="color:#059669;">Versión publicada: v${versionActual}</strong> &nbsp;·&nbsp; <span style="color:#64748b;">Publicada: ${fechaStr}</span>`;
+    } else {
+      infoDiv.innerHTML = '<span style="color:#94a3b8;">Aún no existe el documento de versión. Se creará al publicar la primera vez.</span>';
+    }
+
+    // Historial
+    if (historial.length > 0) {
+      const rows = historial.slice().reverse().map(h => {
+        const f = h.fecha ? (h.fecha.toDate ? h.fecha.toDate() : new Date(h.fecha)) : null;
+        const fStr = f
+          ? f.toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' })
+          : '—';
+        return `<tr>
+          <td style="font-weight:700;color:#0d7490;">v${h.version}</td>
+          <td style="color:#475569;">${fStr}</td>
+          <td style="color:#64748b;">${h.nota || '—'}</td>
+        </tr>`;
+      }).join('');
+      histDiv.innerHTML = `
+        <div style="font-size:.78rem;font-weight:700;color:#475569;text-transform:uppercase;margin-bottom:6px;">Historial</div>
+        <table class="admin-tabla">
+          <thead><tr><th>Versión</th><th>Fecha</th><th>Nota</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    } else {
+      if (histDiv) histDiv.innerHTML = '';
+    }
+
+    // Listener del botón publicar — clonar para remover listeners previos
+    const btnNuevo = btn.cloneNode(true);
+    btn.parentNode.replaceChild(btnNuevo, btn);
+    btnNuevo.addEventListener('click', async () => {
+      const notaInput = document.getElementById('admin-version-nota');
+      const nota = notaInput ? notaInput.value : '';
+      const msgEl = document.getElementById('admin-version-msg');
+      btnNuevo.disabled = true;
+      btnNuevo.textContent = 'Publicando...';
+      if (msgEl) { msgEl.className = 'admin-msg'; msgEl.style.display = 'none'; }
+      try {
+        const nuevaVersion = versionActual + 1;
+        const ahoraLocal = new Date();
+        const nuevaEntrada = { version: nuevaVersion, fecha: Timestamp.fromDate(ahoraLocal), nota: nota.trim() };
+        const vRef = doc(db, 'config', 'version_preguntas');
+        const snapActual = await getDoc(vRef);
+        const historialActual = snapActual.exists() ? (snapActual.data().historial || []) : [];
+        await setDoc(vRef, {
+          version: nuevaVersion,
+          fecha: serverTimestamp(),
+          historial: [...historialActual, nuevaEntrada]
+        });
+        if (msgEl) {
+          msgEl.textContent = `✅ Versión v${nuevaVersion} publicada. Los usuarios con el sitio abierto invalidarán su caché automáticamente.`;
+          msgEl.className = 'admin-msg ok';
+          msgEl.style.display = 'block';
+        }
+        if (notaInput) notaInput.value = '';
+        // Recargar sección para actualizar historial en UI
+        await _cargarSeccionVersionAdmin();
+      } catch(err) {
+        if (msgEl) {
+          msgEl.textContent = '⚠️ Error al publicar: ' + (err.message || err);
+          msgEl.className = 'admin-msg err';
+          msgEl.style.display = 'block';
+        }
+        btnNuevo.disabled = false;
+        btnNuevo.textContent = '🚀 Publicar actualización';
+      }
+    });
+
+  } catch(err) {
+    if (infoDiv) infoDiv.innerHTML = '<span style="color:#dc2626;">Error al cargar versión: ' + (err.message || err) + '</span>';
+  }
+}
+
 // ── Aprobar solicitud ─────────────────────────────────────────────────────
 // El vencimiento se calcula desde el momento exacto de aprobación.
 // Si el usuario ya existe en "licencias" (renovación), se actualiza su plan.
@@ -2996,13 +3121,115 @@ function limpiarUI() {
 // ======== CACHÉ Y CARGA DE PREGUNTAS DESDE FIRESTORE ========
 const cachePreguntas = {};
 
+// ── CACHÉ PERSISTENTE EN localStorage ──────────────────────────────────────
+// Claves:
+//   iar_version_local          → número de versión actualmente cacheada
+//   iar_cache_{seccionId}      → JSON con array de preguntas de esa sección
+
+const LS_VERSION_KEY = 'iar_version_local';
+
+// Versión vigente conocida desde Firestore (se llena al iniciar sesión).
+// null = todavía no se leyó.
+let _versionVigente = null;
+let _versionListenerUnsubscribe = null;
+
+/** Lee /config/version_preguntas una vez y arranca el listener en tiempo real. */
+async function iniciarCacheVersion() {
+  try {
+    const vSnap = await getDoc(doc(db, 'config', 'version_preguntas'));
+    if (vSnap.exists()) {
+      _aplicarVersionRemota(vSnap.data().version);
+    }
+  } catch(err) {
+    console.warn('[IAR] No se pudo leer version_preguntas:', err.message || err);
+  }
+
+  // Listener en tiempo real: si el admin publica mientras el usuario está activo,
+  // el caché se invalida automáticamente.
+  if (_versionListenerUnsubscribe) _versionListenerUnsubscribe();
+  _versionListenerUnsubscribe = onSnapshot(
+    doc(db, 'config', 'version_preguntas'),
+    (snap) => {
+      if (snap.exists()) _aplicarVersionRemota(snap.data().version);
+    },
+    (err) => console.warn('[IAR] onSnapshot version_preguntas:', err.message || err)
+  );
+}
+
+function _aplicarVersionRemota(versionRemota) {
+  const versionLocal = localStorage.getItem(LS_VERSION_KEY);
+  if (versionLocal !== String(versionRemota)) {
+    // Versión nueva → limpiar caché de preguntas
+    _limpiarCachePreguntas();
+    localStorage.setItem(LS_VERSION_KEY, String(versionRemota));
+    console.log('[IAR] Versión de preguntas actualizada a', versionRemota, '— caché invalidado');
+  }
+  _versionVigente = versionRemota;
+}
+
+function _limpiarCachePreguntas() {
+  // Limpiar caché en memoria
+  Object.keys(cachePreguntas).forEach(k => delete cachePreguntas[k]);
+  // Limpiar caché en localStorage
+  const keysToDelete = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('iar_cache_')) keysToDelete.push(k);
+  }
+  keysToDelete.forEach(k => localStorage.removeItem(k));
+  // Limpiar preguntasPorSeccion global (buscador + simulacro)
+  if (window.preguntasPorSeccion) {
+    Object.keys(window.preguntasPorSeccion).forEach(k => delete window.preguntasPorSeccion[k]);
+  }
+}
+
+/** Guarda preguntas de una sección en localStorage con la versión actual. */
+function _guardarEnCache(seccionId, preguntas) {
+  if (_versionVigente === null) return; // Sin versión conocida, no cachear
+  try {
+    localStorage.setItem('iar_cache_' + seccionId, JSON.stringify(preguntas));
+  } catch(e) {
+    // localStorage lleno — no es crítico, simplemente no se guarda
+    console.warn('[IAR] localStorage lleno, no se pudo cachear', seccionId);
+  }
+}
+
+/** Lee preguntas de una sección desde localStorage si la versión coincide. */
+function _leerDeCache(seccionId) {
+  if (_versionVigente === null) return null;
+  const versionLocal = localStorage.getItem(LS_VERSION_KEY);
+  if (versionLocal !== String(_versionVigente)) return null;
+  try {
+    const raw = localStorage.getItem('iar_cache_' + seccionId);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) {
+    return null;
+  }
+}
+
+// Exponer para que script.js pueda iniciar la versión
+window.iniciarCacheVersion = iniciarCacheVersion;
+window.limpiarCachePreguntas = _limpiarCachePreguntas;
+
 async function cargarSeccion(seccionId) {
+  // 1. Caché en memoria (misma sesión)
   if (cachePreguntas[seccionId]) return cachePreguntas[seccionId];
+
+  // 2. Caché persistente en localStorage
+  const desdeLS = _leerDeCache(seccionId);
+  if (desdeLS) {
+    cachePreguntas[seccionId] = desdeLS;
+    console.log('[IAR] Sección', seccionId, 'cargada desde localStorage');
+    return desdeLS;
+  }
+
+  // 3. Firestore
   try {
     const snap = await getDoc(doc(db, "preguntas", seccionId));
     if (snap.exists()) {
       const preguntas = snap.data().preguntas || [];
       cachePreguntas[seccionId] = preguntas;
+      _guardarEnCache(seccionId, preguntas);
       return preguntas;
     }
     return null;
@@ -3085,6 +3312,7 @@ onAuthStateChanged(auth, async (user) => {
         if (licencia.esDemo) aplicarRestriccionesDemo();
         _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
         mostrarBarraSesion(user.email, licencia);
+        iniciarCacheVersion();
         iniciarMonitoreoSesion(user);
         iniciarCountdownLicencia(licencia);
         registrarVisitaUnica(user.uid, licencia.esDemo);
@@ -3108,6 +3336,7 @@ onAuthStateChanged(auth, async (user) => {
           if (licencia.esDemo) aplicarRestriccionesDemo();
           _resolveLicenciaVerificada({ esDemo: licencia.esDemo === true }); window._licenciaYaVerificada = true;
           mostrarBarraSesion(user.email, licencia);
+          iniciarCacheVersion();
           iniciarMonitoreoSesion(user);
           iniciarCountdownLicencia(licencia);
           registrarVisitaUnica(user.uid, licencia.esDemo);
@@ -3889,6 +4118,9 @@ onAuthStateChanged(auth, user => {
     _seccionEditorActual = null;
     _preguntasEditor = null;
     _cambiosPendientes = {};
+    // Cerrar listener de versión
+    if (_versionListenerUnsubscribe) { _versionListenerUnsubscribe(); _versionListenerUnsubscribe = null; }
+    _versionVigente = null;
     // Cerrar panel de modificar si estaba abierto (ambos posibles IDs)
     const modOverlay = document.getElementById('modificar-overlay');
     if (modOverlay) modOverlay.remove();
