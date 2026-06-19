@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IAR - Exámenes de Residencias Médicas</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=1">
     <style>
         /* Prevenir selección de texto */
         * {
@@ -79,20 +79,60 @@
 
         <div class="info-extra">
             <br>
-                👥 Visitas: <span id="contador-visitas">...</span>
-                <script>
-                window.addEventListener('load', function() {
-                    fetch('https://examenesiaruba.goatcounter.com/counter/TOTAL.json')
-                    .then(function(r) { return r.json(); })
-                    .then(function(data) {
-                        document.getElementById('contador-visitas').textContent = data.count;
-                    })
-                    .catch(function() {
-                        document.getElementById('contador-visitas').textContent = 'N/D';
-                    });
-                });
-                </script>
+            <span id="contador-visitas-wrap">👥 Visitas: <span id="contador-visitas">...</span></span>
+            &nbsp;&nbsp;
+            <span id="contador-online-menu" style="display:none;">🟢 <span id="contador-online-num">0</span> en línea</span>
+            <script>
+            // Cargar visitas desde Firestore y usuarios en línea desde RTDB
+            // Esperar a que firebase-auth.js exponga las instancias
+            (function() {
+              function _intentarCargarContadores(intentos) {
+                intentos = intentos || 0;
+                var firestoreReady = window._firestoreDB_comentarios; // db Firestore expuesto por firebase-auth.js
+                var rtdbReady = window._rtdbInstance;
+                if (firestoreReady) {
+                  _cargarVisitas(firestoreReady);
+                }
+                if (rtdbReady) {
+                  _suscribirOnline(rtdbReady);
+                }
+                if ((!firestoreReady || !rtdbReady) && intentos < 40) {
+                  setTimeout(function() { _intentarCargarContadores(intentos + 1); }, 300);
+                } else if (!firestoreReady) {
+                  document.getElementById('contador-visitas').textContent = 'N/D';
+                }
+              }
 
+              async function _cargarVisitas(db) {
+                try {
+                  var { getDoc, doc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+                  var snap = await getDoc(doc(db, 'estadisticas', 'visitas'));
+                  if (snap.exists()) {
+                    var s = snap.data();
+                    document.getElementById('contador-visitas').textContent = (s.total || 0).toLocaleString('es-AR');
+                  } else {
+                    document.getElementById('contador-visitas').textContent = '0';
+                  }
+                } catch(e) {
+                  document.getElementById('contador-visitas').textContent = 'N/D';
+                }
+              }
+
+              async function _suscribirOnline(rtdb) {
+                try {
+                  var { ref, onValue } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js');
+                  onValue(ref(rtdb, 'presencia'), function(snap) {
+                    var data = snap.val() || {};
+                    var online = Object.values(data).filter(function(u) { return u.online; }).length;
+                    document.getElementById('contador-online-num').textContent = online;
+                    document.getElementById('contador-online-menu').style.display = online > 0 ? '' : 'none';
+                  });
+                } catch(e) {}
+              }
+
+              window.addEventListener('load', function() { _intentarCargarContadores(0); });
+            })();
+            </script>
         </div>
     </div>
 
@@ -178,7 +218,11 @@
                     <li onclick="mostrarCuestionario('iarnov2024')">NOV 2024</li>
                     <li onclick="mostrarCuestionario('iardic2024')">DIC 2024</li>
                 </ul>
-                <h2 style="margin-top: 20px;">2025</h2>
+
+            </div>
+            <!-- Columna 3: 2026 -->
+            <div class="columna">
+                <h2>2025</h2>
                 <ul>
                     <li onclick="mostrarCuestionario('iarfeb2025')">FEB 2025</li>
                     <li onclick="mostrarCuestionario('iarmar2025')">MAR 2025</li>
@@ -189,10 +233,8 @@
                     <li onclick="mostrarCuestionario('iarnov2025')">NOV 2025</li>
                     <li onclick="mostrarCuestionario('iardic2025')">DIC 2025</li>
                 </ul>
-            </div>
-            <!-- Columna 3: 2026 -->
-            <div class="columna">
-                <h2>2026</h2>
+
+                <h2 style="margin-top: 20px;">2025</h2>
                 <ul>
                     <li onclick="mostrarCuestionario('iarfeb2026')">FEB 2026</li>
                 </ul>
@@ -1027,7 +1069,11 @@
                     <li onclick="mostrarRespuestasExamen('iarnov2024')">NOV 2024</li>
                     <li onclick="mostrarRespuestasExamen('iardic2024')">DIC 2024</li>
                 </ul>
-                <h2 style="margin-top:20px;">2025</h2>
+
+            </div>
+            <!-- Columna 3: 2026 -->
+            <div class="columna">
+                <h2>2025</h2>
                 <ul>
                     <li onclick="mostrarRespuestasExamen('iarfeb2025')">FEB 2025</li>
                     <li onclick="mostrarRespuestasExamen('iarmar2025')">MAR 2025</li>
@@ -1038,10 +1084,8 @@
                     <li onclick="mostrarRespuestasExamen('iarnov2025')">NOV 2025</li>
                     <li onclick="mostrarRespuestasExamen('iardic2025')">DIC 2025</li>
                 </ul>
-            </div>
-            <!-- Columna 3: 2026 -->
-            <div class="columna">
-                <h2>2026</h2>
+                
+                <h2 style="margin-top:20px;">2026</h2>
                 <ul>
                     <li onclick="mostrarRespuestasExamen('iarfeb2026')">FEB 2026</li>
                 </ul>
@@ -1165,11 +1209,11 @@
     </div>
 
     <!-- Sistema de autenticación Firebase (debe cargar antes que script.js) -->
-    <script type="module" src="firebase-auth.js"></script>
+    <script type="module" src="firebase-auth.js?v=1"></script>
 
     <!-- Script principal de la aplicación -->
-    <script defer src="script.js"></script>
-    <script defer src="script_onebyone.js"></script>
+    <script defer src="script.js?v=1"></script>
+    <script defer src="script_onebyone.js?v=1"></script>
 
     <script>
         // Medidas de seguridad adicionales
