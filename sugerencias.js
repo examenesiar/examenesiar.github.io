@@ -1,5 +1,5 @@
 /* ============================================================
-   sugerencias.js — Canal privado de sugerencias usuario <-> admin
+   v2 sugerencias.js — Canal privado de sugerencias usuario <-> admin
    ============================================================
    Requiere que firebase-auth.js ya haya expuesto:
      window._firestoreDB_comentarios  -> instancia Firestore (db)
