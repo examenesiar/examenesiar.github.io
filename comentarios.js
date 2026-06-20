@@ -1,5 +1,5 @@
 /* ============================================================
-   v2 comentarios.js — Caja de comentarios con hilos para cada examen
+   v4 comentarios.js — Caja de comentarios con hilos para cada examen
    ============================================================
    Requiere que firebase-auth.js ya haya expuesto (en mostrarBarraSesion):
      window._firestoreDB_comentarios  -> instancia Firestore (db)
@@ -441,7 +441,6 @@
     }
 
     // ── Bloqueo visual del form si el usuario es demo ──
-    const esAdmin = !!window._esAdmin;
     const licencia = window._licenciaActual;
     const esDemo = !esAdmin && licencia && licencia.esDemo === true;
 
