@@ -1,4 +1,4 @@
-/* v4 ========== firebase-auth.js ==========
+/* v5 ========== firebase-auth.js ==========
    Sistema de autenticación con Firebase
    - Login con email y contraseña
    - Sesión única por dispositivo
@@ -323,15 +323,22 @@ function inyectarEstilos() {
     .lv-plan-card:hover { box-shadow:0 2px 8px rgba(0,0,0,.12);transform:translateY(-1px); }
     .demo-plan-sel-card:hover { box-shadow:0 2px 8px rgba(0,0,0,.12);transform:translateY(-1px); }
 
-    /* ── Badge solicitudes en botón Admin ── */
+    /* ── Campana de notificaciones unificada, junto al botón Admin ── */
     #btn-abrir-admin {
       position:relative;
     }
-    #btn-abrir-admin .admin-sol-badge {
-      position:absolute;top:-7px;right:-7px;
+    #bell-admin-unificada {
+      position:relative;
+      display:inline-flex;align-items:center;justify-content:center;
+      width:34px;height:34px;
+      cursor:pointer;font-size:1.15rem;
+      margin-right:4px;
+    }
+    #bell-admin-unificada .admin-sol-badge {
+      position:absolute;top:-2px;right:-2px;
       background:#dc2626;color:#fff;
-      font-size:.68rem;font-weight:800;
-      min-width:18px;height:18px;
+      font-size:.66rem;font-weight:800;
+      min-width:17px;height:17px;
       border-radius:50%;display:flex;align-items:center;justify-content:center;
       padding:0 4px;box-shadow:0 2px 6px rgba(220,38,38,.5);
       animation:pulseBadge 1.5s ease-in-out infinite;
@@ -1792,6 +1799,11 @@ function mostrarBarraSesion(email, licencia) {
 
   // Botón admin solo para el admin
   if (email === ADMIN_EMAIL) {
+    const bellAdmin = document.createElement("span");
+    bellAdmin.id = "bell-admin-unificada";
+    bellAdmin.innerHTML = "🔔";
+    der.appendChild(bellAdmin);
+
     const btnAdmin = document.createElement("button");
     btnAdmin.id = "btn-abrir-admin";
     btnAdmin.innerHTML = "⚙️ Admin";
@@ -1815,6 +1827,7 @@ function mostrarBarraSesion(email, licencia) {
   if (email === ADMIN_EMAIL) {
     iniciarListenerSolicitudes();
     iniciarListenerNotificacionesAdmin();
+    _iniciarCampanaAdminUnificada();
   }
 }
 
@@ -1827,11 +1840,17 @@ function iniciarListenerSolicitudes() {
   _solicitudesUnsubscribe = onSnapshot(q, (snapshot) => {
     // Guardar siempre el último snapshot para renderizarlo cuando se abra el panel
     _ultimoSnapshotSolicitudes = snapshot;
-    const total = snapshot.size;
 
-    // Actualizar badge combinado (solicitudes + notificaciones) en el botón Admin
-    _ultimoTotalSolicitudesBadge = total;
-    _actualizarBadgeAdminCombinado();
+    // Separar por tipo para la campana (prioridad: nuevos primero, luego renovaciones)
+    _ultimasSolicitudesNuevas = [];
+    _ultimasSolicitudesRenovacion = [];
+    snapshot.forEach(d => {
+      const data = d.data();
+      const item = { id: d.id, ...data };
+      if (data.tipo === "renovacion") _ultimasSolicitudesRenovacion.push(item);
+      else _ultimasSolicitudesNuevas.push(item);
+    });
+    _actualizarCampanaAdminUnificada();
 
     // Si el panel está abierto, renderizar solicitudes en tiempo real
     const overlay = document.getElementById("admin-overlay");
@@ -1849,27 +1868,49 @@ function detenerListenerSolicitudes() {
     _solicitudesUnsubscribe = null;
   }
   _ultimoSnapshotSolicitudes = null;
+  _ultimasSolicitudesNuevas = [];
+  _ultimasSolicitudesRenovacion = [];
 }
 
 // ======== LISTENER TIEMPO REAL NOTIFICACIONES (comentarios + sugerencias) ========
 let _notifsAdminUnsubscribe = null;
-let _ultimoTotalSolicitudesBadge = 0;
-let _ultimoTotalNotifsBadge = 0;
+let _ultimasSolicitudesNuevas = [];
+let _ultimasSolicitudesRenovacion = [];
+let _ultimasNotifsComentarios = [];
+let _ultimasNotifsSugerencias = [];
 
-function _actualizarBadgeAdminCombinado() {
-  const btn = document.getElementById("btn-abrir-admin");
-  if (!btn) return;
-  const total = _ultimoTotalSolicitudesBadge + _ultimoTotalNotifsBadge;
-  let badge = btn.querySelector(".admin-sol-badge");
+// Construye la lista combinada de pendientes, en orden de prioridad:
+// 1) Solicitudes de nuevos usuarios (demo → pago)
+// 2) Solicitudes de renovación de licencia
+// 3) Comentarios sin leer
+// 4) Sugerencias sin leer
+function _listaPendientesAdminUnificada() {
+  const items = [];
+  _ultimasSolicitudesNuevas.forEach(s => items.push({ categoria: 'solicitud_nueva', data: s }));
+  _ultimasSolicitudesRenovacion.forEach(s => items.push({ categoria: 'solicitud_renovacion', data: s }));
+  _ultimasNotifsComentarios.forEach(n => items.push({ categoria: 'comentario', data: n }));
+  _ultimasNotifsSugerencias.forEach(n => items.push({ categoria: 'sugerencia', data: n }));
+  return items;
+}
+
+function _actualizarCampanaAdminUnificada() {
+  const bell = document.getElementById("bell-admin-unificada");
+  if (!bell) return;
+  const total = _listaPendientesAdminUnificada().length;
+  let badge = bell.querySelector(".admin-sol-badge");
   if (total > 0) {
     if (!badge) {
       badge = document.createElement("span");
       badge.className = "admin-sol-badge";
-      btn.appendChild(badge);
+      bell.appendChild(badge);
     }
     badge.textContent = total > 99 ? "99+" : String(total);
   } else if (badge) {
     badge.remove();
+  }
+  // Si el desplegable está abierto, refrescar su contenido también
+  if (document.getElementById("panel-campana-admin")) {
+    _renderPanelCampanaAdmin();
   }
 }
 
@@ -1879,8 +1920,15 @@ function iniciarListenerNotificacionesAdmin() {
   const q = query(collection(db, "notificaciones_admin"), where("leido", "==", false));
 
   _notifsAdminUnsubscribe = onSnapshot(q, (snapshot) => {
-    _ultimoTotalNotifsBadge = snapshot.size;
-    _actualizarBadgeAdminCombinado();
+    _ultimasNotifsComentarios = [];
+    _ultimasNotifsSugerencias = [];
+    snapshot.forEach(d => {
+      const data = d.data();
+      const item = { id: d.id, ...data };
+      if (data.tipo === 'sugerencia') _ultimasNotifsSugerencias.push(item);
+      else _ultimasNotifsComentarios.push(item); // notifs viejas sin "tipo" = comentario
+    });
+    _actualizarCampanaAdminUnificada();
 
     // Si el panel admin está abierto, refrescar la sección de notificaciones
     const overlay = document.getElementById("admin-overlay");
@@ -1897,7 +1945,134 @@ function detenerListenerNotificacionesAdmin() {
     _notifsAdminUnsubscribe();
     _notifsAdminUnsubscribe = null;
   }
-  _ultimoTotalNotifsBadge = 0;
+  _ultimasNotifsComentarios = [];
+  _ultimasNotifsSugerencias = [];
+}
+
+// ======== CAMPANA UNIFICADA: panel desplegable junto al botón Admin ========
+// Click en la campana → muestra los pendientes agrupados por categoría,
+// con prioridad: solicitudes nuevas > renovaciones > comentarios > sugerencias.
+// Click en un ítem → cierra el panel, abre la consola de admin y navega
+// directo al lugar correspondiente (igual que ya hacían _abrirNotifComentario
+// y _abrirNotifSugerencia; para solicitudes, hace scroll a su sección).
+function _iniciarCampanaAdminUnificada() {
+  const bell = document.getElementById("bell-admin-unificada");
+  if (!bell || bell._listenerListo) return;
+  bell._listenerListo = true;
+  bell.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const existente = document.getElementById("panel-campana-admin");
+    if (existente) { existente.remove(); return; }
+    _renderPanelCampanaAdmin();
+  });
+}
+
+function _renderPanelCampanaAdmin() {
+  let panel = document.getElementById("panel-campana-admin");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "panel-campana-admin";
+    panel.style.cssText = "position:fixed;bottom:48px;right:10px;background:#fff;border:1px solid #cbd5e1;" +
+      "border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);width:340px;max-width:calc(100vw - 20px);" +
+      "max-height:420px;overflow-y:auto;z-index:999999;padding:8px;";
+    document.body.appendChild(panel);
+    setTimeout(() => {
+      document.addEventListener("click", function cerrar(ev) {
+        const bell = document.getElementById("bell-admin-unificada");
+        if (!panel.contains(ev.target) && ev.target !== bell) {
+          panel.remove();
+          document.removeEventListener("click", cerrar);
+        }
+      });
+    }, 0);
+  }
+
+  const secciones = [
+    {
+      key: 'solicitud_nueva', titulo: '🆕 Nuevos usuarios (demo → pago)', color: '#1e40af',
+      items: _ultimasSolicitudesNuevas
+    },
+    {
+      key: 'solicitud_renovacion', titulo: '🔄 Renovaciones de licencia', color: '#5b21b6',
+      items: _ultimasSolicitudesRenovacion
+    },
+    {
+      key: 'comentario', titulo: '💬 Comentarios', color: '#1e40af',
+      items: _ultimasNotifsComentarios
+    },
+    {
+      key: 'sugerencia', titulo: '🟧 Sugerencias', color: '#ea580c',
+      items: _ultimasNotifsSugerencias
+    }
+  ];
+
+  const total = secciones.reduce((acc, s) => acc + s.items.length, 0);
+
+  if (total === 0) {
+    panel.innerHTML = '<div style="padding:14px;font-size:.85rem;color:#94a3b8;">No hay pendientes por revisar.</div>';
+    return;
+  }
+
+  panel.innerHTML = secciones.filter(s => s.items.length).map(s => `
+    <div style="font-size:.72rem;font-weight:800;color:${s.color};text-transform:uppercase;letter-spacing:.03em;padding:6px 8px 4px;">
+      ${s.titulo}
+    </div>
+    ${s.items.map(it => _renderItemCampanaAdmin(s.key, it)).join('')}
+  `).join('<div style="height:1px;background:#f1f5f9;margin:6px 0;"></div>');
+
+  panel.querySelectorAll('.campana-admin-item').forEach(el => {
+    el.addEventListener('click', () => _onClickItemCampanaAdmin(el.dataset));
+  });
+}
+
+function _renderItemCampanaAdmin(categoria, it) {
+  if (categoria === 'solicitud_nueva' || categoria === 'solicitud_renovacion') {
+    const fecha = it.fecha ? (it.fecha.toDate ? it.fecha.toDate() : new Date(it.fecha)).toLocaleDateString("es-AR") : '-';
+    return `
+      <div class="campana-admin-item" data-categoria="${categoria}" data-id="${it.id}"
+        style="padding:9px 10px;border-bottom:1px solid #f1f5f9;cursor:pointer;">
+        <div style="font-weight:700;font-size:.82rem;color:#1e3a8a;">${_escapeHTMLAdmin(it.email || 'Usuario')}</div>
+        <div style="font-size:.76rem;color:#475569;margin-top:2px;">Plan solicitado: ${_escapeHTMLAdmin(it.plan || '1 semana')}</div>
+        <div style="font-size:.7rem;color:#94a3b8;margin-top:2px;">${fecha}</div>
+      </div>`;
+  }
+  // comentario o sugerencia
+  const nombre = it.nombre || 'Usuario';
+  const texto = (it.texto || '').slice(0, 90) + ((it.texto || '').length > 90 ? '…' : '');
+  const sub = categoria === 'comentario' ? `en ${it.seccionId || '-'}` : '';
+  return `
+    <div class="campana-admin-item" data-categoria="${categoria}" data-id="${it.id}"
+      data-seccion="${it.seccionId || ''}" data-mensaje="${it.mensajeId || ''}" data-sugerencia="${it.sugerenciaId || ''}"
+      style="padding:9px 10px;border-bottom:1px solid #f1f5f9;cursor:pointer;">
+      <div style="font-weight:700;font-size:.82rem;color:#1e3a8a;">
+        ${_escapeHTMLAdmin(nombre)} ${it.parentId ? '<span style="color:#94a3b8;">(respuesta)</span>' : ''}
+      </div>
+      <div style="font-size:.78rem;color:#475569;margin-top:2px;">${_escapeHTMLAdmin(texto)}</div>
+      ${sub ? `<div style="font-size:.7rem;color:#94a3b8;margin-top:2px;">${sub}</div>` : ''}
+    </div>`;
+}
+
+async function _onClickItemCampanaAdmin(dataset) {
+  const panel = document.getElementById("panel-campana-admin");
+  if (panel) panel.remove();
+  const { categoria, id, seccion, mensaje, sugerencia } = dataset;
+
+  if (categoria === 'solicitud_nueva' || categoria === 'solicitud_renovacion') {
+    await mostrarPanelAdmin();
+    const destino = document.getElementById(
+      categoria === 'solicitud_nueva' ? 'admin-sol-nuevos' : 'admin-sol-renovaciones'
+    );
+    if (destino) destino.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  if (categoria === 'comentario') {
+    await _abrirNotifComentario(seccion, mensaje, id);
+    return;
+  }
+  if (categoria === 'sugerencia') {
+    await _abrirNotifSugerencia(sugerencia, id);
+    return;
+  }
 }
 
 function renderizarSolicitudesAdmin(snapshot) {
@@ -3624,7 +3799,6 @@ onAuthStateChanged(auth, async (user) => {
         iniciarCountdownLicencia(licencia);
         registrarVisitaUnica(user.uid, licencia.esDemo);
         iniciarPresencia(user.uid, user.email);
-        iniciarNotificacionesComentarios();
         // Sincronizar progreso desde Firestore al cargar sesión existente
         if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
       } else if (snap.exists() && snap.data().deviceId !== deviceId) {
@@ -3648,7 +3822,6 @@ onAuthStateChanged(auth, async (user) => {
           iniciarCountdownLicencia(licencia);
           registrarVisitaUnica(user.uid, licencia.esDemo);
           iniciarPresencia(user.uid, user.email);
-        iniciarNotificacionesComentarios();
           // Sincronizar progreso desde Firestore (puede venir de otro dispositivo)
           if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
         } else {
@@ -3668,7 +3841,6 @@ onAuthStateChanged(auth, async (user) => {
         iniciarCountdownLicencia(licencia);
         registrarVisitaUnica(user.uid, licencia.esDemo);
         iniciarPresencia(user.uid, user.email);
-        iniciarNotificacionesComentarios();
         // Sincronizar progreso desde Firestore
         if (window._sincronizarProgresoDesdeFirestore) window._sincronizarProgresoDesdeFirestore(user.uid);
       }
@@ -3732,85 +3904,10 @@ function _actualizarContadorOnline(cantidad) {
 }
 
 // ======================================================
-// ======== NOTIFICACIONES DE COMENTARIOS (Admin) ========
+// (El sistema viejo de campana solo-comentarios fue reemplazado por la
+// campana unificada junto al botón Admin — ver _iniciarCampanaAdminUnificada,
+// _renderPanelCampanaAdmin y _actualizarCampanaAdminUnificada más arriba.)
 // ======================================================
-let _notifComentariosUnsub = null;
-
-function iniciarNotificacionesComentarios() {
-  if (!window._esAdmin) return; // solo corre para el admin
-  import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js")
-    .then(({ collection, query, where, orderBy, onSnapshot, doc, updateDoc }) => {
-      const q = query(
-        collection(db, 'notificaciones_admin'),
-        where('leido', '==', false),
-        orderBy('ts', 'desc')
-      );
-      if (_notifComentariosUnsub) _notifComentariosUnsub();
-      _notifComentariosUnsub = onSnapshot(q, (snap) => {
-        const items = [];
-        snap.forEach(d => items.push({ id: d.id, ...d.data() }));
-        _renderBellNotificaciones(items, updateDoc, doc);
-      });
-    });
-}
-
-function _renderBellNotificaciones(items, updateDoc, docFn) {
-  const izq = document.getElementById('barra-sesion-izq');
-  if (!izq) return;
-  let bell = document.getElementById('bell-notif-comentarios');
-  if (!bell) {
-    bell = document.createElement('span');
-    bell.id = 'bell-notif-comentarios';
-    bell.style.cssText = 'cursor:pointer;position:relative;margin-left:10px;font-size:1.1rem;';
-    izq.appendChild(bell);
-  }
-  bell.innerHTML = `🔔${items.length ? `<span style="position:absolute;top:-6px;right:-8px;background:#dc2626;color:#fff;border-radius:50%;font-size:.65rem;padding:1px 5px;font-weight:700;">${items.length}</span>` : ''}`;
-
-  bell.onclick = () => {
-    const existente = document.getElementById('panel-notif-comentarios');
-    if (existente) { existente.remove(); return; }
-
-    const panel = document.createElement('div');
-    panel.id = 'panel-notif-comentarios';
-    panel.style.cssText = 'position:fixed;bottom:48px;left:10px;background:#fff;border:1px solid #cbd5e1;' +
-      'border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);max-width:340px;max-height:400px;' +
-      'overflow-y:auto;z-index:999999;padding:8px;';
-
-    panel.innerHTML = items.length
-      ? items.map(it => `
-        <div class="notif-item" data-id="${it.id}" data-seccion="${it.seccionId}" data-mensaje="${it.mensajeId}"
-          style="padding:9px 10px;border-bottom:1px solid #f1f5f9;cursor:pointer;">
-          <div style="font-weight:700;font-size:.82rem;color:#1e3a8a;">
-            ${it.nombre || 'Usuario'} ${it.parentId ? '<span style="color:#94a3b8;">(respuesta)</span>' : ''}
-          </div>
-          <div style="font-size:.78rem;color:#475569;margin-top:2px;">
-            ${(it.texto || '').slice(0, 90)}${(it.texto || '').length > 90 ? '…' : ''}
-          </div>
-          <div style="font-size:.7rem;color:#94a3b8;margin-top:2px;">en ${it.seccionId}</div>
-        </div>`).join('')
-      : '<div style="padding:14px;font-size:.85rem;color:#94a3b8;">Sin comentarios nuevos.</div>';
-
-    document.body.appendChild(panel);
-
-    panel.querySelectorAll('.notif-item').forEach(el => {
-      el.addEventListener('click', async () => {
-        const { seccion, mensaje, id } = el.dataset;
-        try { await updateDoc(docFn(db, 'notificaciones_admin', id), { leido: true }); } catch (e) {}
-        panel.remove();
-        if (typeof window.irAComentario === 'function') window.irAComentario(seccion, mensaje);
-      });
-    });
-
-    setTimeout(() => {
-      document.addEventListener('click', function cerrar(ev) {
-        if (!panel.contains(ev.target) && ev.target !== bell) {
-          panel.remove();
-          document.removeEventListener('click', cerrar);
-        }
-      });
-    }, 0);
-  };
-}
 
 // ── Detener presencia al cerrar sesión ──
 function detenerPresencia(uid) {
