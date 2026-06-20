@@ -1,4 +1,4 @@
-/* v5 ========== firebase-auth.js ==========
+/* v6 ========== firebase-auth.js ==========
    Sistema de autenticación con Firebase
    - Login con email y contraseña
    - Sesión única por dispositivo
@@ -376,6 +376,29 @@ function inyectarEstilos() {
       font-size:.9rem;font-weight:700;color:#475569;
       text-transform:uppercase;letter-spacing:.05em;margin-bottom:14px;
     }
+
+    /* ── Pestañas del Panel de Administración ── */
+    .admin-tabs {
+      display:flex;gap:4px;margin-bottom:20px;border-bottom:2px solid #e2e8f0;
+      flex-wrap:wrap;
+    }
+    .admin-tab-btn {
+      position:relative;
+      background:none;border:none;cursor:pointer;
+      padding:10px 18px;font-size:.88rem;font-weight:700;color:#64748b;
+      border-bottom:3px solid transparent;margin-bottom:-2px;
+      transition:color .15s,border-color .15s;
+      display:flex;align-items:center;gap:6px;
+    }
+    .admin-tab-btn:hover { color:#0d7490; }
+    .admin-tab-btn.activo { color:#0d7490;border-bottom-color:#0d7490; }
+    .admin-tab-badge {
+      background:#dc2626;color:#fff;font-size:.66rem;font-weight:800;
+      min-width:17px;height:17px;border-radius:50%;
+      display:inline-flex;align-items:center;justify-content:center;padding:0 4px;
+    }
+    .admin-tab-panel { display:none; }
+    .admin-tab-panel.activo { display:block; }
     .admin-row { display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:8px; }
     .admin-field { display:flex;flex-direction:column;gap:4px;flex:1;min-width:140px; }
     .admin-field label { font-size:.75rem;font-weight:600;color:#64748b;text-transform:uppercase; }
@@ -1912,6 +1935,8 @@ function _actualizarCampanaAdminUnificada() {
   if (document.getElementById("panel-campana-admin")) {
     _renderPanelCampanaAdmin();
   }
+  // Mantener también los badges de las pestañas del panel admin sincronizados
+  if (typeof _actualizarBadgesTabsAdmin === "function") _actualizarBadgesTabsAdmin();
 }
 
 function iniciarListenerNotificacionesAdmin() {
@@ -1952,9 +1977,8 @@ function detenerListenerNotificacionesAdmin() {
 // ======== CAMPANA UNIFICADA: panel desplegable junto al botón Admin ========
 // Click en la campana → muestra los pendientes agrupados por categoría,
 // con prioridad: solicitudes nuevas > renovaciones > comentarios > sugerencias.
-// Click en un ítem → cierra el panel, abre la consola de admin y navega
-// directo al lugar correspondiente (igual que ya hacían _abrirNotifComentario
-// y _abrirNotifSugerencia; para solicitudes, hace scroll a su sección).
+// Click en un ítem → cierra el panel, abre la consola de admin directo en
+// la PESTAÑA correspondiente (Usuarios y Licencias / Notificaciones).
 function _iniciarCampanaAdminUnificada() {
   const bell = document.getElementById("bell-admin-unificada");
   if (!bell || bell._listenerListo) return;
@@ -2059,6 +2083,7 @@ async function _onClickItemCampanaAdmin(dataset) {
 
   if (categoria === 'solicitud_nueva' || categoria === 'solicitud_renovacion') {
     await mostrarPanelAdmin();
+    _cambiarTabAdmin('usuarios');
     const destino = document.getElementById(
       categoria === 'solicitud_nueva' ? 'admin-sol-nuevos' : 'admin-sol-renovaciones'
     );
@@ -2135,6 +2160,7 @@ async function mostrarPanelAdmin() {
       renderizarSolicitudesAdmin(_ultimoSnapshotSolicitudes);
     }
     await cargarDatosAdmin();
+    _actualizarBadgesTabsAdmin();
     return;
   }
 
@@ -2179,111 +2205,134 @@ async function mostrarPanelAdmin() {
         <button class="admin-btn admin-btn-cerrar" id="admin-cerrar">✕ Cerrar</button>
       </div>
 
-      <!-- Estadísticas -->
-      <div class="admin-seccion">
-        <h3>📊 Visitas únicas</h3>
-        <div id="admin-visitas"><em style="color:#94a3b8;font-size:.85rem;">Cargando...</em></div>
-      </div>
-
-      <!-- Solicitudes Pendientes: 2 subsecciones -->
-      <div class="admin-seccion">
-        <h3>📋 Solicitudes Pendientes</h3>
-        <div id="admin-msg-acciones" class="admin-msg" style="display:none;margin-bottom:8px;"></div>
-
-        <!-- Subsección 1: Solicitudes desde DEMO (nuevos) -->
-        <div class="admin-sol-section">
-          <div class="admin-sol-section-titulo" style="border-left-color:#1e40af;">
-            🆕 Solicitudes desde DEMO — Nuevos usuarios
-          </div>
-          <div id="admin-sol-nuevos"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
-        </div>
-
-        <!-- Subsección 2: Renovaciones de licencia -->
-        <div class="admin-sol-section" style="margin-top:14px;">
-          <div class="admin-sol-section-titulo" style="border-left-color:#5b21b6;">
-            🔄 Renovaciones de Licencia — Usuarios existentes
-          </div>
-          <div id="admin-sol-renovaciones"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
-        </div>
-      </div>
-
-      <!-- Notificaciones: Comentarios y Sugerencias -->
-      <div class="admin-seccion">
-        <h3>🔔 Notificaciones</h3>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
-          <button class="admin-btn" style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;font-size:.78rem;padding:5px 12px;" onclick="window.marcarTodasNotifsLeidasAdmin()">
-            ✅ Marcar todas como leídas
-          </button>
-        </div>
-
-        <!-- Subsección 1: Notificaciones de comentarios -->
-        <div class="admin-sol-section">
-          <div class="admin-sol-section-titulo" style="border-left-color:#1e40af;">
-            💬 Comentarios <span id="admin-notif-count-comentarios"></span>
-          </div>
-          <div id="admin-notif-comentarios"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
-        </div>
-
-        <!-- Subsección 2: Notificaciones de sugerencias -->
-        <div class="admin-sol-section" style="margin-top:14px;">
-          <div class="admin-sol-section-titulo" style="border-left-color:#ea580c;">
-            🟧 Sugerencias <span id="admin-notif-count-sugerencias"></span>
-          </div>
-          <div id="admin-notif-sugerencias"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
-        </div>
-      </div>
-
-      <!-- Usuarios con licencia -->
-      <div class="admin-seccion">
-        <h3>👥 Usuarios con licencia</h3>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
-          <button class="admin-btn" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;font-size:.78rem;padding:5px 12px;" onclick="window.limpiarVencidosAdmin()">
-            🗑️ Eliminar vencidos hace +3 meses
-          </button>
-          <span id="admin-limpiar-msg" style="font-size:.78rem;color:#64748b;"></span>
-        </div>
-        <div id="admin-usuarios"><em style="color:#94a3b8;font-size:.85rem;">Cargando...</em></div>
-      </div>
-
-      <!-- Publicar actualización de preguntas -->
-      <div class="admin-seccion" style="border-top:2px solid #d1fae5;padding-top:16px;margin-top:4px;">
-        <h3 style="color:#059669;">📦 Publicar actualización de preguntas</h3>
-        <p style="font-size:.82rem;color:#64748b;margin-bottom:10px;">
-          Al publicar, se incrementa la versión en Firestore y todos los usuarios con el sitio abierto
-          invalidan su caché automáticamente. Los que recarguen también descargarán las preguntas nuevas.
-        </p>
-        <div id="admin-version-info" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:.85rem;">
-          <em style="color:#94a3b8;">Cargando versión actual...</em>
-        </div>
-        <div style="margin-bottom:10px;">
-          <label style="font-size:.78rem;font-weight:600;color:#64748b;display:block;margin-bottom:4px;text-transform:uppercase;">Nota opcional (ej: "Agregados exámenes Feb 2026")</label>
-          <input type="text" id="admin-version-nota" placeholder="Descripción de los cambios..." maxlength="200"
-            style="width:100%;padding:8px 10px;border:1.5px solid #cbd5e1;border-radius:7px;font-size:.88rem;color:#1f2937;outline:none;box-sizing:border-box;" />
-        </div>
-        <button class="admin-btn admin-btn-success" id="admin-btn-publicar-version" style="font-size:.88rem;padding:10px 20px;">
-          🚀 Publicar actualización
+      <!-- Pestañas -->
+      <div class="admin-tabs" id="admin-tabs">
+        <button class="admin-tab-btn activo" data-tab="general">📊 General</button>
+        <button class="admin-tab-btn" data-tab="notificaciones">
+          🔔 Notificaciones <span class="admin-tab-badge" id="admin-tab-badge-notif" style="display:none;"></span>
         </button>
-        <div id="admin-version-msg" class="admin-msg" style="display:none;margin-top:8px;"></div>
-        <div id="admin-version-historial" style="margin-top:14px;"></div>
+        <button class="admin-tab-btn" data-tab="usuarios">
+          👥 Usuarios y Licencias <span class="admin-tab-badge" id="admin-tab-badge-usuarios" style="display:none;"></span>
+        </button>
       </div>
 
-      <!-- Auditoría de eliminaciones (moderación del admin) -->
-      <div class="admin-seccion" style="border-top:2px solid #fee2e2;padding-top:16px;margin-top:4px;">
-        <h3 style="color:#dc2626;cursor:pointer;" id="admin-auditoria-toggle">
-          🗂️ Auditoría de eliminaciones <span style="font-size:.78rem;font-weight:400;color:#94a3b8;">(clic para ver/ocultar)</span>
-        </h3>
-        <p style="font-size:.8rem;color:#64748b;margin-bottom:10px;">
-          Registro de comentarios y sugerencias ajenas eliminadas por el administrador. No es editable ni se puede borrar.
-        </p>
-        <div id="admin-auditoria-cont" style="display:none;">
-          <em style="color:#94a3b8;font-size:.85rem;">Cargando...</em>
+      <!-- ════════ PESTAÑA: GENERAL ════════ -->
+      <div class="admin-tab-panel activo" data-tab-panel="general">
+
+        <!-- Estadísticas -->
+        <div class="admin-seccion">
+          <h3>📊 Visitas únicas</h3>
+          <div id="admin-visitas"><em style="color:#94a3b8;font-size:.85rem;">Cargando...</em></div>
         </div>
+
+        <!-- Publicar actualización de preguntas -->
+        <div class="admin-seccion">
+          <h3 style="color:#059669;">📦 Publicar actualización de preguntas</h3>
+          <p style="font-size:.82rem;color:#64748b;margin-bottom:10px;">
+            Al publicar, se incrementa la versión en Firestore y todos los usuarios con el sitio abierto
+            invalidan su caché automáticamente. Los que recarguen también descargarán las preguntas nuevas.
+          </p>
+          <div id="admin-version-info" style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:.85rem;">
+            <em style="color:#94a3b8;">Cargando versión actual...</em>
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="font-size:.78rem;font-weight:600;color:#64748b;display:block;margin-bottom:4px;text-transform:uppercase;">Nota opcional (ej: "Agregados exámenes Feb 2026")</label>
+            <input type="text" id="admin-version-nota" placeholder="Descripción de los cambios..." maxlength="200"
+              style="width:100%;padding:8px 10px;border:1.5px solid #cbd5e1;border-radius:7px;font-size:.88rem;color:#1f2937;outline:none;box-sizing:border-box;" />
+          </div>
+          <button class="admin-btn admin-btn-success" id="admin-btn-publicar-version" style="font-size:.88rem;padding:10px 20px;">
+            🚀 Publicar actualización
+          </button>
+          <div id="admin-version-msg" class="admin-msg" style="display:none;margin-top:8px;"></div>
+          <div id="admin-version-historial" style="margin-top:14px;"></div>
+        </div>
+
+        <!-- Auditoría de eliminaciones (moderación del admin) -->
+        <div class="admin-seccion">
+          <h3 style="color:#dc2626;cursor:pointer;" id="admin-auditoria-toggle">
+            🗂️ Auditoría de eliminaciones <span style="font-size:.78rem;font-weight:400;color:#94a3b8;">(clic para ver/ocultar)</span>
+          </h3>
+          <p style="font-size:.8rem;color:#64748b;margin-bottom:10px;">
+            Registro de comentarios y sugerencias ajenas eliminadas por el administrador. No es editable ni se puede borrar.
+          </p>
+          <div id="admin-auditoria-cont" style="display:none;">
+            <em style="color:#94a3b8;font-size:.85rem;">Cargando...</em>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ════════ PESTAÑA: NOTIFICACIONES (Comentarios + Sugerencias) ════════ -->
+      <div class="admin-tab-panel" data-tab-panel="notificaciones">
+        <div class="admin-seccion">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+            <button class="admin-btn" style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;font-size:.78rem;padding:5px 12px;" onclick="window.marcarTodasNotifsLeidasAdmin()">
+              ✅ Marcar todas como leídas
+            </button>
+          </div>
+
+          <!-- Subsección 1: Notificaciones de comentarios -->
+          <div class="admin-sol-section">
+            <div class="admin-sol-section-titulo" style="border-left-color:#1e40af;">
+              💬 Comentarios <span id="admin-notif-count-comentarios"></span>
+            </div>
+            <div id="admin-notif-comentarios"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
+          </div>
+
+          <!-- Subsección 2: Notificaciones de sugerencias -->
+          <div class="admin-sol-section" style="margin-top:14px;">
+            <div class="admin-sol-section-titulo" style="border-left-color:#ea580c;">
+              🟧 Sugerencias <span id="admin-notif-count-sugerencias"></span>
+            </div>
+            <div id="admin-notif-sugerencias"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ════════ PESTAÑA: USUARIOS Y LICENCIAS (Solicitudes + Usuarios) ════════ -->
+      <div class="admin-tab-panel" data-tab-panel="usuarios">
+
+        <!-- Solicitudes Pendientes: 2 subsecciones -->
+        <div class="admin-seccion">
+          <h3>📋 Solicitudes Pendientes</h3>
+          <div id="admin-msg-acciones" class="admin-msg" style="display:none;margin-bottom:8px;"></div>
+
+          <!-- Subsección 1: Solicitudes desde DEMO (nuevos) -->
+          <div class="admin-sol-section">
+            <div class="admin-sol-section-titulo" style="border-left-color:#1e40af;">
+              🆕 Solicitudes desde DEMO — Nuevos usuarios
+            </div>
+            <div id="admin-sol-nuevos"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
+          </div>
+
+          <!-- Subsección 2: Renovaciones de licencia -->
+          <div class="admin-sol-section" style="margin-top:14px;">
+            <div class="admin-sol-section-titulo" style="border-left-color:#5b21b6;">
+              🔄 Renovaciones de Licencia — Usuarios existentes
+            </div>
+            <div id="admin-sol-renovaciones"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
+          </div>
+        </div>
+
+        <!-- Usuarios con licencia -->
+        <div class="admin-seccion">
+          <h3>👥 Usuarios con licencia</h3>
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+            <button class="admin-btn" style="background:#fee2e2;color:#dc2626;border:1px solid #fca5a5;font-size:.78rem;padding:5px 12px;" onclick="window.limpiarVencidosAdmin()">
+              🗑️ Eliminar vencidos hace +3 meses
+            </button>
+            <span id="admin-limpiar-msg" style="font-size:.78rem;color:#64748b;"></span>
+          </div>
+          <div id="admin-usuarios"><em style="color:#94a3b8;font-size:.85rem;">Cargando...</em></div>
+        </div>
+
       </div>
 
     </div>
   `;
   document.body.appendChild(overlay);
   document.getElementById("admin-cerrar").addEventListener("click", () => overlay.style.display = "none");
+  _iniciarTabsAdmin();
   const _toggleAuditoria = document.getElementById("admin-auditoria-toggle");
   if (_toggleAuditoria) {
     _toggleAuditoria.addEventListener("click", async () => {
@@ -2298,6 +2347,50 @@ async function mostrarPanelAdmin() {
     });
   }
   await cargarDatosAdmin();
+  _actualizarBadgesTabsAdmin();
+}
+
+// ======== PESTAÑAS DEL PANEL DE ADMINISTRACIÓN ========
+// Cambia entre "general", "notificaciones" y "usuarios" sin recargar datos
+// (todo ya está en el DOM, solo se oculta/muestra). Los badges numéricos de
+// cada pestaña reflejan los mismos contadores que ya alimentan la campana 🔔.
+function _iniciarTabsAdmin() {
+  const tabs = document.getElementById("admin-tabs");
+  if (!tabs) return;
+  tabs.querySelectorAll(".admin-tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => _cambiarTabAdmin(btn.dataset.tab));
+  });
+}
+
+function _cambiarTabAdmin(tabKey) {
+  const overlay = document.getElementById("admin-overlay");
+  if (!overlay) return;
+  overlay.querySelectorAll(".admin-tab-btn").forEach(btn => {
+    btn.classList.toggle("activo", btn.dataset.tab === tabKey);
+  });
+  overlay.querySelectorAll(".admin-tab-panel").forEach(panel => {
+    panel.classList.toggle("activo", panel.dataset.tabPanel === tabKey);
+  });
+}
+
+// Sincroniza los numeritos de las pestañas "Notificaciones" y "Usuarios y
+// Licencias" con los mismos totales que usa la campana 🔔 de la barra superior.
+function _actualizarBadgesTabsAdmin() {
+  const badgeNotif = document.getElementById("admin-tab-badge-notif");
+  const badgeUsuarios = document.getElementById("admin-tab-badge-usuarios");
+  if (!badgeNotif && !badgeUsuarios) return; // panel no está abierto
+
+  const totalNotif = (_ultimasNotifsComentarios?.length || 0) + (_ultimasNotifsSugerencias?.length || 0);
+  const totalSolicitudes = (_ultimasSolicitudesNuevas?.length || 0) + (_ultimasSolicitudesRenovacion?.length || 0);
+
+  if (badgeNotif) {
+    if (totalNotif > 0) { badgeNotif.textContent = totalNotif > 99 ? "99+" : totalNotif; badgeNotif.style.display = ""; }
+    else badgeNotif.style.display = "none";
+  }
+  if (badgeUsuarios) {
+    if (totalSolicitudes > 0) { badgeUsuarios.textContent = totalSolicitudes > 99 ? "99+" : totalSolicitudes; badgeUsuarios.style.display = ""; }
+    else badgeUsuarios.style.display = "none";
+  }
 }
 
 function calcularVencimiento(plan) {
@@ -2643,6 +2736,7 @@ function _mostrarBotonVolverNotificaciones() {
       const sugOverlay = document.getElementById('sug-overlay');
       if (sugOverlay) sugOverlay.remove();
       await mostrarPanelAdmin();
+      _cambiarTabAdmin('notificaciones');
       const notifSection = document.getElementById('admin-notif-comentarios');
       if (notifSection) notifSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
