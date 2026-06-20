@@ -16,7 +16,11 @@
        -> abre el hilo completo de una sugerencia puntual para
           que el admin la lea, responda y cambie el estado.
 
-   Estructura en Firestore (coherente con reglas_firestore_database_17):
+   Cambios v2:
+     - Filtro de lenguaje inapropiado vía window.IARFiltro (filtro_palabras.js).
+       (Los usuarios demo SÍ pueden enviar sugerencias — sin restricción aquí.)
+
+   Estructura en Firestore (coherente con reglas_firestore_database_18):
      sugerencias/{sugerenciaId}
        { uid, nombre, mensaje, estado:'no_resuelto'|'resuelto',
          fecha_creacion, fecha_resolucion?, resuelta_por? }
@@ -318,6 +322,12 @@
         const ta = container.querySelector(`#sug-reply-ta-${id}`);
         const texto = ta.value.trim();
         if (!texto) { ta.focus(); return; }
+        // Filtro de lenguaje inapropiado
+        if (window.IARFiltro && window.IARFiltro.contieneMalasPalabras(texto)) {
+          alert('⚠️ Tu mensaje contiene lenguaje inapropiado. Por favor, revisalo antes de enviar.');
+          ta.focus();
+          return;
+        }
         btn.disabled = true;
         try {
           await _responderSugerencia(id, texto, esAdmin);
@@ -430,6 +440,12 @@
       const mensaje = taNuevo.value.trim();
       if (mensaje.length < 5) {
         errorDiv.textContent = 'El mensaje debe tener al menos 5 caracteres.';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      // Filtro de lenguaje inapropiado
+      if (window.IARFiltro && window.IARFiltro.contieneMalasPalabras(mensaje)) {
+        errorDiv.textContent = '⚠️ Tu sugerencia contiene lenguaje inapropiado. Por favor, revisala antes de enviar.';
         errorDiv.style.display = 'block';
         return;
       }
