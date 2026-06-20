@@ -1,4 +1,4 @@
-/* ========== firebase-auth.js V2==========
+/* ========== firebase-auth.js V3==========
    Sistema de autenticación con Firebase
    - Login con email y contraseña
    - Sesión única por dispositivo
@@ -1812,7 +1812,10 @@ function mostrarBarraSesion(email, licencia) {
   barra.appendChild(der);
   document.body.appendChild(barra);
   document.body.style.paddingBottom = "46px";
-  if (email === ADMIN_EMAIL) iniciarListenerSolicitudes();
+  if (email === ADMIN_EMAIL) {
+    iniciarListenerSolicitudes();
+    iniciarListenerNotificacionesAdmin();
+  }
 }
 
 // ======== LISTENER TIEMPO REAL SOLICITUDES ========
@@ -1826,21 +1829,9 @@ function iniciarListenerSolicitudes() {
     _ultimoSnapshotSolicitudes = snapshot;
     const total = snapshot.size;
 
-    // Actualizar badge en el botón Admin
-    const btn = document.getElementById("btn-abrir-admin");
-    if (btn) {
-      let badge = btn.querySelector(".admin-sol-badge");
-      if (total > 0) {
-        if (!badge) {
-          badge = document.createElement("span");
-          badge.className = "admin-sol-badge";
-          btn.appendChild(badge);
-        }
-        badge.textContent = total > 99 ? "99+" : String(total);
-      } else {
-        if (badge) badge.remove();
-      }
-    }
+    // Actualizar badge combinado (solicitudes + notificaciones) en el botón Admin
+    _ultimoTotalSolicitudesBadge = total;
+    _actualizarBadgeAdminCombinado();
 
     // Si el panel está abierto, renderizar solicitudes en tiempo real
     const overlay = document.getElementById("admin-overlay");
@@ -1858,6 +1849,55 @@ function detenerListenerSolicitudes() {
     _solicitudesUnsubscribe = null;
   }
   _ultimoSnapshotSolicitudes = null;
+}
+
+// ======== LISTENER TIEMPO REAL NOTIFICACIONES (comentarios + sugerencias) ========
+let _notifsAdminUnsubscribe = null;
+let _ultimoTotalSolicitudesBadge = 0;
+let _ultimoTotalNotifsBadge = 0;
+
+function _actualizarBadgeAdminCombinado() {
+  const btn = document.getElementById("btn-abrir-admin");
+  if (!btn) return;
+  const total = _ultimoTotalSolicitudesBadge + _ultimoTotalNotifsBadge;
+  let badge = btn.querySelector(".admin-sol-badge");
+  if (total > 0) {
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "admin-sol-badge";
+      btn.appendChild(badge);
+    }
+    badge.textContent = total > 99 ? "99+" : String(total);
+  } else if (badge) {
+    badge.remove();
+  }
+}
+
+function iniciarListenerNotificacionesAdmin() {
+  if (_notifsAdminUnsubscribe) return; // ya activo
+
+  const q = query(collection(db, "notificaciones_admin"), where("leido", "==", false));
+
+  _notifsAdminUnsubscribe = onSnapshot(q, (snapshot) => {
+    _ultimoTotalNotifsBadge = snapshot.size;
+    _actualizarBadgeAdminCombinado();
+
+    // Si el panel admin está abierto, refrescar la sección de notificaciones
+    const overlay = document.getElementById("admin-overlay");
+    if (overlay && overlay.style.display !== "none" && typeof _cargarNotificacionesAdmin === "function") {
+      _cargarNotificacionesAdmin();
+    }
+  }, (err) => {
+    console.warn("[IAR Admin] Error en listener notificaciones:", err.code);
+  });
+}
+
+function detenerListenerNotificacionesAdmin() {
+  if (_notifsAdminUnsubscribe) {
+    _notifsAdminUnsubscribe();
+    _notifsAdminUnsubscribe = null;
+  }
+  _ultimoTotalNotifsBadge = 0;
 }
 
 function renderizarSolicitudesAdmin(snapshot) {
@@ -1992,6 +2032,32 @@ async function mostrarPanelAdmin() {
         </div>
       </div>
 
+      <!-- Notificaciones: Comentarios y Sugerencias -->
+      <div class="admin-seccion">
+        <h3>🔔 Notificaciones</h3>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+          <button class="admin-btn" style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;font-size:.78rem;padding:5px 12px;" onclick="window.marcarTodasNotifsLeidasAdmin()">
+            ✅ Marcar todas como leídas
+          </button>
+        </div>
+
+        <!-- Subsección 1: Notificaciones de comentarios -->
+        <div class="admin-sol-section">
+          <div class="admin-sol-section-titulo" style="border-left-color:#1e40af;">
+            💬 Comentarios <span id="admin-notif-count-comentarios"></span>
+          </div>
+          <div id="admin-notif-comentarios"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
+        </div>
+
+        <!-- Subsección 2: Notificaciones de sugerencias -->
+        <div class="admin-sol-section" style="margin-top:14px;">
+          <div class="admin-sol-section-titulo" style="border-left-color:#ea580c;">
+            🟧 Sugerencias <span id="admin-notif-count-sugerencias"></span>
+          </div>
+          <div id="admin-notif-sugerencias"><em style="color:#94a3b8;font-size:.82rem;">Cargando...</em></div>
+        </div>
+      </div>
+
       <!-- Usuarios con licencia -->
       <div class="admin-seccion">
         <h3>👥 Usuarios con licencia</h3>
@@ -2026,10 +2092,36 @@ async function mostrarPanelAdmin() {
         <div id="admin-version-historial" style="margin-top:14px;"></div>
       </div>
 
+      <!-- Auditoría de eliminaciones (moderación del admin) -->
+      <div class="admin-seccion" style="border-top:2px solid #fee2e2;padding-top:16px;margin-top:4px;">
+        <h3 style="color:#dc2626;cursor:pointer;" id="admin-auditoria-toggle">
+          🗂️ Auditoría de eliminaciones <span style="font-size:.78rem;font-weight:400;color:#94a3b8;">(clic para ver/ocultar)</span>
+        </h3>
+        <p style="font-size:.8rem;color:#64748b;margin-bottom:10px;">
+          Registro de comentarios y sugerencias ajenas eliminadas por el administrador. No es editable ni se puede borrar.
+        </p>
+        <div id="admin-auditoria-cont" style="display:none;">
+          <em style="color:#94a3b8;font-size:.85rem;">Cargando...</em>
+        </div>
+      </div>
+
     </div>
   `;
   document.body.appendChild(overlay);
   document.getElementById("admin-cerrar").addEventListener("click", () => overlay.style.display = "none");
+  const _toggleAuditoria = document.getElementById("admin-auditoria-toggle");
+  if (_toggleAuditoria) {
+    _toggleAuditoria.addEventListener("click", async () => {
+      const cont = document.getElementById("admin-auditoria-cont");
+      if (!cont) return;
+      const visible = cont.style.display !== "none";
+      cont.style.display = visible ? "none" : "";
+      if (!visible && !cont.dataset.cargado) {
+        cont.dataset.cargado = "1";
+        await _cargarAuditoriaEliminaciones();
+      }
+    });
+  }
   await cargarDatosAdmin();
 }
 
@@ -2099,6 +2191,7 @@ async function cargarDatosAdmin() {
     }
     // Si el listener aún no está activo (ej: admin abre panel desde otra ruta), arrancarlo
     if (!_solicitudesUnsubscribe) iniciarListenerSolicitudes();
+    if (!_notifsAdminUnsubscribe) iniciarListenerNotificacionesAdmin();
 
     // ── Usuarios con licencia ──
     const licSnap = await getDocs(col(db, "licencias"));
@@ -2192,9 +2285,230 @@ async function cargarDatosAdmin() {
     // ── Versión de preguntas ──────────────────────────────────────────────
     await _cargarSeccionVersionAdmin();
 
+    // ── Notificaciones (comentarios y sugerencias) ─────────────────────────
+    await _cargarNotificacionesAdmin();
+
   } catch(err) {
     console.error("Error cargando datos admin:", err);
     if (solNuevosDiv) solNuevosDiv.innerHTML = '<em style="color:#dc2626;">Error al cargar datos.</em>';
+  }
+}
+
+// ── Notificaciones — panel admin (comentarios + sugerencias) ────────────
+// Separadas en dos categorías; cada notificación es clicable y navega
+// directamente al comentario o a la sugerencia correspondiente.
+
+function _fechaCortaAdmin(ts) {
+  try {
+    const d = ts && ts.toDate ? ts.toDate() : new Date();
+    return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
+      ' ' + d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  } catch (e) { return ''; }
+}
+
+function _escapeHTMLAdmin(str) {
+  return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function _truncarAdmin(texto, max) {
+  if (!texto) return '';
+  return texto.length <= max ? texto : texto.substring(0, max) + '…';
+}
+
+async function _cargarNotificacionesAdmin() {
+  const contComentarios = document.getElementById('admin-notif-comentarios');
+  const contSugerencias = document.getElementById('admin-notif-sugerencias');
+  const countComentarios = document.getElementById('admin-notif-count-comentarios');
+  const countSugerencias = document.getElementById('admin-notif-count-sugerencias');
+  if (!contComentarios || !contSugerencias) return;
+
+  try {
+    const { collection: col, getDocs, query, where, orderBy, limit } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+
+    const q = query(col(db, 'notificaciones_admin'), orderBy('ts', 'desc'), limit(100));
+    const snap = await getDocs(q);
+    const notifsComentarios = [];
+    const notifsSugerencias = [];
+    snap.forEach(d => {
+      const data = { id: d.id, ...d.data() };
+      if (data.tipo === 'sugerencia') notifsSugerencias.push(data);
+      else notifsComentarios.push(data); // por compatibilidad, notifs viejas sin "tipo" cuentan como comentario
+    });
+
+    const noLeidasComentarios = notifsComentarios.filter(n => !n.leido).length;
+    const noLeidasSugerencias = notifsSugerencias.filter(n => !n.leido).length;
+    if (countComentarios) countComentarios.innerHTML = noLeidasComentarios > 0
+      ? `<span class="admin-badge badge-vencido">${noLeidasComentarios} nueva${noLeidasComentarios === 1 ? '' : 's'}</span>` : '';
+    if (countSugerencias) countSugerencias.innerHTML = noLeidasSugerencias > 0
+      ? `<span class="admin-badge badge-vencido">${noLeidasSugerencias} nueva${noLeidasSugerencias === 1 ? '' : 's'}</span>` : '';
+
+    contComentarios.innerHTML = notifsComentarios.length
+      ? notifsComentarios.map(_renderNotifComentarioAdmin).join('')
+      : '<em style="color:#94a3b8;font-size:.82rem;">Sin notificaciones de comentarios.</em>';
+
+    contSugerencias.innerHTML = notifsSugerencias.length
+      ? notifsSugerencias.map(_renderNotifSugerenciaAdmin).join('')
+      : '<em style="color:#94a3b8;font-size:.82rem;">Sin notificaciones de sugerencias.</em>';
+
+    contComentarios.querySelectorAll('.admin-notif-item').forEach(el => {
+      el.addEventListener('click', () => _abrirNotifComentario(el.dataset.seccion, el.dataset.mensaje, el.dataset.notifId));
+    });
+    contSugerencias.querySelectorAll('.admin-notif-item').forEach(el => {
+      el.addEventListener('click', () => _abrirNotifSugerencia(el.dataset.sugerencia, el.dataset.notifId));
+    });
+
+  } catch (e) {
+    console.error('Error cargando notificaciones admin:', e);
+    contComentarios.innerHTML = '<em style="color:#dc2626;">Error al cargar notificaciones.</em>';
+    contSugerencias.innerHTML = '<em style="color:#dc2626;">Error al cargar notificaciones.</em>';
+  }
+}
+
+function _renderNotifComentarioAdmin(n) {
+  const noLeidoStyle = n.leido ? '' : 'background:#eff6ff;border-left:3px solid #1e40af;';
+  return `
+    <div class="admin-notif-item" data-seccion="${n.seccionId || ''}" data-mensaje="${n.mensajeId || ''}" data-notif-id="${n.id}"
+      style="padding:9px 12px;border-radius:7px;margin-bottom:6px;cursor:pointer;border:1px solid #e2e8f0;${noLeidoStyle}">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+        <span style="font-weight:700;font-size:.82rem;color:#1e3a8a;">${_escapeHTMLAdmin(n.nombre || 'Usuario')}</span>
+        <span style="font-size:.7rem;color:#94a3b8;">${_fechaCortaAdmin(n.ts)}</span>
+      </div>
+      <div style="font-size:.78rem;color:#64748b;margin-top:2px;">Examen: ${_escapeHTMLAdmin(n.seccionId || '-')}${n.parentId ? ' · respuesta' : ''}</div>
+      <div style="font-size:.84rem;color:#1e293b;margin-top:3px;">${_escapeHTMLAdmin(_truncarAdmin(n.texto || '', 140))}</div>
+    </div>`;
+}
+
+function _renderNotifSugerenciaAdmin(n) {
+  const noLeidoStyle = n.leido ? '' : 'background:#fff7ed;border-left:3px solid #ea580c;';
+  return `
+    <div class="admin-notif-item" data-sugerencia="${n.sugerenciaId || ''}" data-notif-id="${n.id}"
+      style="padding:9px 12px;border-radius:7px;margin-bottom:6px;cursor:pointer;border:1px solid #fed7aa;${noLeidoStyle}">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+        <span style="font-weight:700;font-size:.82rem;color:#9a3412;">${_escapeHTMLAdmin(n.nombre || 'Usuario')}</span>
+        <span style="font-size:.7rem;color:#94a3b8;">${_fechaCortaAdmin(n.ts)}</span>
+      </div>
+      <div style="font-size:.84rem;color:#1e293b;margin-top:3px;">${_escapeHTMLAdmin(_truncarAdmin(n.texto || '', 140))}</div>
+    </div>`;
+}
+
+async function _marcarNotifLeida(notifId) {
+  if (!notifId) return;
+  try {
+    const { updateDoc } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    await updateDoc(doc(db, 'notificaciones_admin', notifId), { leido: true });
+  } catch (e) { console.warn('No se pudo marcar como leída:', e.message); }
+}
+
+window.marcarTodasNotifsLeidasAdmin = async function() {
+  try {
+    const { collection: col, getDocs, query, where, updateDoc: upd } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    const q = query(col(db, 'notificaciones_admin'), where('leido', '==', false));
+    const snap = await getDocs(q);
+    const proms = [];
+    snap.forEach(d => proms.push(upd(doc(db, 'notificaciones_admin', d.id), { leido: true })));
+    await Promise.all(proms);
+    await _cargarNotificacionesAdmin();
+  } catch (e) {
+    alert('No se pudieron marcar las notificaciones: ' + (e.message || ''));
+  }
+};
+
+// Navegación directa: clic en notificación de COMENTARIO → abre el examen
+// y desplaza hasta el comentario correspondiente. Incluye botón "Volver a
+// Notificaciones" (solo visible para el admin).
+async function _abrirNotifComentario(seccionId, mensajeId, notifId) {
+  if (!seccionId || !mensajeId) return;
+  await _marcarNotifLeida(notifId);
+  const overlay = document.getElementById('admin-overlay');
+  if (overlay) overlay.style.display = 'none';
+  _mostrarBotonVolverNotificaciones();
+  if (typeof window.irAComentario === 'function') {
+    window.irAComentario(seccionId, mensajeId);
+  }
+}
+
+// Navegación directa: clic en notificación de SUGERENCIA → abre directamente
+// el hilo de esa sugerencia (sin que el admin tenga que buscarla a mano).
+async function _abrirNotifSugerencia(sugerenciaId, notifId) {
+  if (!sugerenciaId) return;
+  await _marcarNotifLeida(notifId);
+  const overlay = document.getElementById('admin-overlay');
+  if (overlay) overlay.style.display = 'none';
+  _mostrarBotonVolverNotificaciones();
+  if (window.IARSugerencias && typeof window.IARSugerencias.abrirHiloAdmin === 'function') {
+    window.IARSugerencias.abrirHiloAdmin(sugerenciaId);
+  }
+}
+
+// Botón flotante "Volver a Notificaciones" — solo para el admin, aparece
+// al navegar desde una notificación y vuelve directo al panel de admin
+// con el foco en la sección de Notificaciones.
+function _mostrarBotonVolverNotificaciones() {
+  if (!window._esAdmin) return;
+  let btn = document.getElementById('btn-volver-notificaciones');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'btn-volver-notificaciones';
+    btn.textContent = '🔔 Volver a Notificaciones';
+    btn.style.position = 'fixed';
+    btn.style.left = '16px';
+    btn.style.bottom = '16px';
+    btn.style.zIndex = '1000';
+    btn.style.padding = '10px 14px';
+    btn.style.border = 'none';
+    btn.style.borderRadius = '999px';
+    btn.style.boxShadow = '0 4px 12px rgba(0,0,0,.15)';
+    btn.style.cursor = 'pointer';
+    btn.style.fontWeight = 'bold';
+    btn.style.background = '#0f172a';
+    btn.style.color = '#fff';
+    btn.addEventListener('click', async () => {
+      btn.style.display = 'none';
+      const sugOverlay = document.getElementById('sug-overlay');
+      if (sugOverlay) sugOverlay.remove();
+      await mostrarPanelAdmin();
+      const notifSection = document.getElementById('admin-notif-comentarios');
+      if (notifSection) notifSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    document.body.appendChild(btn);
+  }
+  btn.style.display = '';
+}
+
+// ── Auditoría de eliminaciones — registro de moderación del admin ───────
+// Carga perezosa (solo cuando el admin despliega la sección) de los
+// registros guardados en auditoria_eliminaciones. Es de solo lectura:
+// ni el admin puede editar o borrar estos registros (reglas Firestore).
+async function _cargarAuditoriaEliminaciones() {
+  const cont = document.getElementById('admin-auditoria-cont');
+  if (!cont) return;
+  try {
+    const { collection: col, getDocs, query, orderBy, limit } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js");
+    const q = query(col(db, 'auditoria_eliminaciones'), orderBy('ts', 'desc'), limit(100));
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      cont.innerHTML = '<em style="color:#94a3b8;font-size:.85rem;">Sin eliminaciones registradas todavía.</em>';
+      return;
+    }
+    let html = `<div style="overflow-x:auto;"><table class="admin-tabla"><thead><tr>
+      <th>Tipo</th><th>Autor original</th><th>Contenido eliminado</th><th>Eliminado por</th><th>Fecha</th>
+    </tr></thead><tbody>`;
+    snap.forEach(d => {
+      const a = d.data();
+      const tipoLabel = a.tipo === 'sugerencia' ? '🟧 Sugerencia' : '💬 Comentario';
+      html += `<tr>
+        <td style="font-size:.78rem;white-space:nowrap;">${tipoLabel}</td>
+        <td style="font-size:.8rem;">${_escapeHTMLAdmin(a.autorOriginalNombre || '-')}</td>
+        <td style="font-size:.8rem;max-width:260px;">${_escapeHTMLAdmin(_truncarAdmin(a.textoOriginal || '-', 160))}</td>
+        <td style="font-size:.8rem;">${_escapeHTMLAdmin((a.eliminadoPorEmail || '-').split('@')[0])}</td>
+        <td style="font-size:.78rem;">${_fechaCortaAdmin(a.ts)}</td>
+      </tr>`;
+    });
+    html += '</tbody></table></div>';
+    cont.innerHTML = html;
+  } catch (e) {
+    console.error('Error cargando auditoría de eliminaciones:', e);
+    cont.innerHTML = '<em style="color:#dc2626;">Error al cargar el registro de auditoría.</em>';
   }
 }
 
@@ -3047,6 +3361,7 @@ function limpiarUI() {
   });
   detenerListenersActividad();
   detenerListenerSolicitudes();
+  detenerListenerNotificacionesAdmin();
   if (auth.currentUser) detenerPresencia(auth.currentUser.uid);
   // Desconectar sincronización de Firestore en script.js
   if (window._setFirestoreSync) window._setFirestoreSync(null, null);
