@@ -1,4 +1,4 @@
-/* ========== firebase-auth.js V3==========
+/* ========== firebase-auth.js V4==========
    Sistema de autenticación con Firebase
    - Login con email y contraseña
    - Sesión única por dispositivo
@@ -2452,7 +2452,7 @@ function _mostrarBotonVolverNotificaciones() {
     btn.textContent = '🔔 Volver a Notificaciones';
     btn.style.position = 'fixed';
     btn.style.left = '16px';
-    btn.style.bottom = '16px';
+    btn.style.bottom = '64px';
     btn.style.zIndex = '1000';
     btn.style.padding = '10px 14px';
     btn.style.border = 'none';
