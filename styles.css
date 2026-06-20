@@ -1,4 +1,4 @@
-/* CSS V2 ===== VARIABLES - PALETA PROFESIONAL AZUL OSCURO Y GRIS ===== */
+/* V3 ===== VARIABLES - PALETA PROFESIONAL AZUL OSCURO Y GRIS ===== */
 :root {
     /* Paleta principal - azul marino */
     --primary-color: #2563eb;        /* Azul principal */
@@ -1612,6 +1612,12 @@ img {
   letter-spacing: .04em;
 }
 .admin-tabla tbody tr:hover { background: #f8fafc; }
+
+.admin-notif-item:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  transition: background .12s, border-color .12s;
+}
 
 @media (max-width: 640px) {
   #admin-overlay { padding: 16px 8px; }
