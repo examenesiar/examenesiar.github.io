@@ -1,5 +1,5 @@
 /* ============================================================
-V1   
+V3   
 script_onebyone.js  —  Modo Una Pregunta Por Vez
    
    CÓMO INTEGRAR:
@@ -754,6 +754,14 @@ script_onebyone.js  —  Modo Una Pregunta Por Vez
     wrapper.className = 'oav-wrapper';
     wrapper.id = 'oav-wrapper-' + seccionId;
     cont.appendChild(wrapper);
+
+    // ── Caja de comentarios: SIEMPRE presente, debajo de la última pregunta,
+    // sin necesidad de terminar el examen. Vive fuera de `wrapper` (que se
+    // reescribe en cada pregunta/resultado), anclada justo después de `cont`,
+    // así nunca se destruye mientras el usuario navega dentro del cuestionario.
+    if (window.IARComentarios && typeof window.IARComentarios.render === 'function') {
+      window.IARComentarios.render(seccionId, cont);
+    }
 
     const _desdeBuscador = typeof window._buscadorQueryPendiente === 'string';
     if (allAnswered && !_desdeBuscador) {
