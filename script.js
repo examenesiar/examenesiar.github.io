@@ -632,6 +632,8 @@ function getImagenUrl(path) {
     // Ocultar botón flotante en páginas de cuestionario
     const _btnFloat = document.getElementById("btn-ver-progreso");
     if (_btnFloat) _btnFloat.style.display = "none";
+    const _btnSugFloat = document.getElementById("btn-ver-sugerencias");
+    if (_btnSugFloat) _btnSugFloat.style.display = "none";
     const _panelFloat = document.getElementById("panel-progreso");
     if (_panelFloat) _panelFloat.style.display = "none";
     document.getElementById("menu-principal")?.classList.add("oculto");
@@ -726,6 +728,13 @@ function getImagenUrl(path) {
     // Mostrar botón flotante solo en menú principal
     const _btnFloat = document.getElementById("btn-ver-progreso");
     if (_btnFloat) _btnFloat.style.display = "";
+    const _btnSugFloat = document.getElementById("btn-ver-sugerencias");
+    if (_btnSugFloat) {
+      _btnSugFloat.style.display = "";
+      if (typeof window._reposicionarBotonSugerencias === "function") {
+        requestAnimationFrame(window._reposicionarBotonSugerencias);
+      }
+    }
     // Cerrar panel de progreso si estaba abierto
     const _panelFloat = document.getElementById("panel-progreso");
     if (_panelFloat) _panelFloat.style.display = "none";
@@ -1378,8 +1387,13 @@ function _hayProgresoEnStorage(seccionId) {
         window._oavState[seccionId] = { currentIdx: 0, total: preguntas.length };
       }
       window._oavRenderOAV(seccionId);
-
-
+      // La caja de comentarios la inserta script_onebyone.js (renderOAV),
+      // anclada después de `cont` — no se duplica acá.
+    } else if (window.IARComentarios && typeof window.IARComentarios.render === 'function') {
+      // Red de seguridad: si por algún motivo el modo OAV no está disponible,
+      // igual mostramos la caja de comentarios siempre debajo de la última
+      // pregunta, anclada después de `cont` (mismo criterio que en OAV).
+      window.IARComentarios.render(seccionId, cont);
     }
     // ────────────────────────────────────────────────────────────────────
     if (typeof _onReady === 'function') _onReady();
@@ -1790,6 +1804,8 @@ function _hayProgresoEnStorage(seccionId) {
     // Ocultar botón flotante de progreso en submenús
     const _btnF = document.getElementById("btn-ver-progreso");
     if (_btnF) _btnF.style.display = "none";
+    const _btnSugF = document.getElementById("btn-ver-sugerencias");
+    if (_btnSugF) _btnSugF.style.display = "none";
     const _panF = document.getElementById("panel-progreso");
     if (_panF) _panF.style.display = "none";
     // Ocultar el menú principal
@@ -1928,6 +1944,8 @@ function _hayProgresoEnStorage(seccionId) {
     // Ocultar botón flotante de progreso
     const _btnFR = document.getElementById("btn-ver-progreso");
     if (_btnFR) _btnFR.style.display = "none";
+    const _btnSugFR = document.getElementById("btn-ver-sugerencias");
+    if (_btnSugFR) _btnSugFR.style.display = "none";
     const _panFR = document.getElementById("panel-progreso");
     if (_panFR) _panFR.style.display = "none";
     // Ocultar todo lo demás
@@ -2414,6 +2432,57 @@ function _hayProgresoEnStorage(seccionId) {
     // El botón flotante solo es visible en el menú principal
     btn.style.display = "none";
     document.body.appendChild(btn);
+
+    // ======== Botón flotante "Sugerencias" — a la izquierda de "Ver mi progreso" ========
+    // Solo existe en el menú principal (igual que "Ver mi progreso"); no aparece
+    // en submenús ni dentro de los cuestionarios.
+    const btnSugerencias = document.createElement("button");
+    btnSugerencias.id = "btn-ver-sugerencias";
+    btnSugerencias.textContent = "🟧 Sugerencias";
+    btnSugerencias.style.position = "fixed";
+    btnSugerencias.style.right = "16px";
+    btnSugerencias.style.bottom = "16px";
+    btnSugerencias.style.zIndex = "1000";
+    btnSugerencias.style.padding = "10px 14px";
+    btnSugerencias.style.border = "none";
+    btnSugerencias.style.borderRadius = "999px";
+    btnSugerencias.style.boxShadow = "0 4px 12px rgba(0,0,0,.15)";
+    btnSugerencias.style.cursor = "pointer";
+    btnSugerencias.style.fontWeight = "bold";
+    btnSugerencias.style.background = "#ea580c";
+    btnSugerencias.style.color = "#fff";
+    btnSugerencias.style.display = "none";
+    btnSugerencias.addEventListener("click", function() {
+      if (window.IARSugerencias && typeof window.IARSugerencias.abrirPanelUsuario === "function") {
+        window.IARSugerencias.abrirPanelUsuario();
+      }
+    });
+    document.body.appendChild(btnSugerencias);
+
+    // Posicionar dinámicamente "Sugerencias" a la izquierda de "Ver mi progreso"
+    // (el ancho de "Ver mi progreso" puede variar levemente según fuente/tamaño).
+    function _reposicionarBotonSugerencias() {
+      const anchoProgreso = btn.offsetWidth || 150;
+      btnSugerencias.style.right = (16 + anchoProgreso + 10) + "px";
+    }
+    requestAnimationFrame(_reposicionarBotonSugerencias);
+    window.addEventListener("resize", _reposicionarBotonSugerencias);
+    // Exponer para que showMenu()/showSection() puedan recalcular si hace falta
+    window._reposicionarBotonSugerencias = _reposicionarBotonSugerencias;
+
+    // Red de seguridad: además de los puntos explícitos donde se oculta/muestra
+    // el botón, observamos la clase "oculto" del menú principal para mantener
+    // ambos botones sincronizados ante cualquier otro flujo de navegación
+    // (cierre de sesión, restricción demo, etc.) que no los haya tocado a mano.
+    const menuPrincipalEl = document.getElementById("menu-principal");
+    if (menuPrincipalEl && window.MutationObserver) {
+      const obs = new MutationObserver(function() {
+        const visible = !menuPrincipalEl.classList.contains("oculto");
+        btnSugerencias.style.display = visible ? "" : "none";
+        if (visible) requestAnimationFrame(_reposicionarBotonSugerencias);
+      });
+      obs.observe(menuPrincipalEl, { attributes: true, attributeFilter: ["class"] });
+    }
 
     const panel = document.createElement("div");
     panel.id = "panel-progreso";
@@ -3268,6 +3337,8 @@ function _hayProgresoEnStorage(seccionId) {
         // Ocultar botón flotante de progreso en el buscador
         var _btnFB = document.getElementById("btn-ver-progreso");
         if (_btnFB) _btnFB.style.display = "none";
+        var _btnSugFB = document.getElementById("btn-ver-sugerencias");
+        if (_btnSugFB) _btnSugFB.style.display = "none";
         var _panFB = document.getElementById("panel-progreso");
         if (_panFB) _panFB.style.display = "none";
         ocultarTodo();
