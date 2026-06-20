@@ -1,5 +1,5 @@
 /* ============================================================
-   V1 comentarios.js — Caja de comentarios con hilos para cada examen
+   v2 comentarios.js — Caja de comentarios con hilos para cada examen
    ============================================================
    Requiere que firebase-auth.js ya haya expuesto (en mostrarBarraSesion):
      window._firestoreDB_comentarios  -> instancia Firestore (db)
@@ -15,7 +15,11 @@
    al responder/navegar entre preguntas — queda siempre visible,
    sin necesidad de terminar el examen.
 
-   Estructura en Firestore (coherente con reglas_firestore_database_17):
+   Cambios v2:
+     - Usuarios DEMO no pueden escribir comentarios (aviso claro en frontend).
+     - Filtro de lenguaje inapropiado vía window.IARFiltro (filtro_palabras.js).
+
+   Estructura en Firestore (coherente con reglas_firestore_database_18):
      comentarios/{seccionId}/mensajes/{mensajeId}
        { uid, nombre, texto, ts, parentId, editado?, fechaEdicion? }
        // parentId null = comentario raíz, string = respuesta anidada
@@ -292,6 +296,12 @@
         const textarea = form.querySelector('textarea');
         const texto = textarea.value.trim();
         if (texto.length < 3) { textarea.focus(); return; }
+        // Filtro de lenguaje inapropiado
+        if (window.IARFiltro && window.IARFiltro.contieneMalasPalabras(texto)) {
+          alert('⚠️ Tu respuesta contiene lenguaje inapropiado. Por favor, revisala antes de enviar.');
+          textarea.focus();
+          return;
+        }
         btn.disabled = true;
         try {
           await _crearComentario(seccionId, texto, btn.dataset.parent);
@@ -335,6 +345,12 @@
         const textarea = form.querySelector('textarea');
         const nuevoTexto = textarea.value.trim();
         if (nuevoTexto.length < 5) { textarea.focus(); return; }
+        // Filtro de lenguaje inapropiado
+        if (window.IARFiltro && window.IARFiltro.contieneMalasPalabras(nuevoTexto)) {
+          alert('⚠️ El comentario editado contiene lenguaje inapropiado. Por favor, revisalo.');
+          textarea.focus();
+          return;
+        }
         btn.disabled = true;
         try {
           await _editarComentario(seccionId, btn.dataset.id, nuevoTexto);
@@ -424,7 +440,25 @@
       btnEmoji.addEventListener('click', () => _togglePicker(picker));
     }
 
+    // ── Bloqueo visual del form si el usuario es demo ──
+    const esAdmin = !!window._esAdmin;
+    const licencia = window._licenciaActual;
+    const esDemo = !esAdmin && licencia && licencia.esDemo === true;
+
+    if (esDemo) {
+      textarea.disabled = true;
+      textarea.placeholder = '🔒 Los usuarios demo no pueden dejar comentarios.';
+      btnEnviar.disabled = true;
+      btnEnviar.title = 'Disponible con licencia completa';
+      const aviso = document.createElement('p');
+      aviso.className = 'com-msg-error';
+      aviso.style.cssText = 'display:block;margin-top:4px;';
+      aviso.textContent = '⚠️ Los comentarios están disponibles solo para usuarios con licencia completa. Podés usar el canal de Sugerencias.';
+      textarea.parentElement.appendChild(aviso);
+    }
+
     btnEnviar.onclick = async () => {
+      if (esDemo) return; // doble protección
       errorDiv.style.display = 'none';
       const texto = textarea.value.trim();
       if (!window._authCurrentUser) {
@@ -437,13 +471,19 @@
         errorDiv.style.display = 'block';
         return;
       }
+      // ── Filtro de lenguaje inapropiado ──
+      if (window.IARFiltro && window.IARFiltro.contieneMalasPalabras(texto)) {
+        errorDiv.textContent = '⚠️ Tu comentario contiene lenguaje inapropiado. Por favor, revisalo antes de publicar.';
+        errorDiv.style.display = 'block';
+        return;
+      }
       btnEnviar.disabled = true;
       try {
         await _crearComentario(seccionId, texto, null);
         textarea.value = '';
         await renderCajaComentarios(seccionId, anchorNode);
       } catch (e) {
-        errorDiv.textContent = e.message || 'No se pudo publicar (¿tu licencia es demo? las demos solo pueden leer).';
+        errorDiv.textContent = e.message || 'No se pudo publicar el comentario.';
         errorDiv.style.display = 'block';
       } finally {
         btnEnviar.disabled = false;
