@@ -1,5 +1,5 @@
 /* ============================================================
-   v2 sugerencias.js — Canal privado de sugerencias usuario <-> admin
+   v3 sugerencias.js — Canal privado de sugerencias usuario <-> admin
    ============================================================
    Requiere que firebase-auth.js ya haya expuesto:
      window._firestoreDB_comentarios  -> instancia Firestore (db)
@@ -426,8 +426,15 @@
         lista.innerHTML = partes.join('');
         _adjuntarEventosHilo(lista, false, _refrescarLista);
       } catch (e) {
-        lista.innerHTML = '<em style="color:#dc2626;">No se pudieron cargar tus sugerencias.</em>';
-        console.warn('[Sugerencias] Error al cargar:', e.message);
+        // 'failed-precondition' = falta el índice compuesto (uid + fecha_creacion)
+        // en Firestore. Es un problema de configuración del proyecto, no del código.
+        if (e && e.code === 'failed-precondition') {
+          lista.innerHTML = '<em style="color:#dc2626;">No se pudieron cargar tus sugerencias (falta un índice en la base de datos). Avisá al administrador.</em>';
+          console.error('[Sugerencias] Falta índice compuesto en Firestore (colección "sugerencias": uid ASC + fecha_creacion DESC). Mirá la consola de Firebase, el enlace para crearlo suele venir en el mensaje de error original:', e.message);
+        } else {
+          lista.innerHTML = '<em style="color:#dc2626;">No se pudieron cargar tus sugerencias.</em>';
+          console.warn('[Sugerencias] Error al cargar:', e.message);
+        }
       }
     }
 
