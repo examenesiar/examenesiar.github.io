@@ -1,4 +1,4 @@
-/* ========== firebase-auth.js V4==========
+/* v4 ========== firebase-auth.js ==========
    Sistema de autenticación con Firebase
    - Login con email y contraseña
    - Sesión única por dispositivo
@@ -2267,6 +2267,7 @@ async function cargarDatosAdmin() {
             <select id="sel-plan-${uid}" style="font-size:.72rem;padding:2px 4px;border:1px solid #cbd5e1;border-radius:4px;">
               <option value="1semana" selected>1 semana</option>
               <option value="1mes">1 mes</option>
+              <option value="demo" style="color:#92400e;font-style:italic;">🆓 Demo (3d)</option>
               <option value="1min" style="color:#d97706;font-style:italic;">⚙️ 1 min (TEST)</option>
             </select>
             <button class="admin-btn admin-btn-success" style="font-size:.72rem;padding:3px 8px;margin-left:3px;"
@@ -2788,10 +2789,26 @@ window.reactivarUsuario = async function(uid) {
   const sel = document.getElementById("sel-plan-" + uid);
   if (!sel) return;
   const plan = sel.value;
-  const planNombres = { "1semana":"1 semana","1mes":"1 mes","1min":"1 min (TEST)" };
-  const venc = calcularVencimiento(plan);
+  const planNombres = { "1semana":"1 semana","1mes":"1 mes","1min":"1 min (TEST)","demo":"demo" };
   const ahora = new Date();
-  const licData = { porVida: false, esDemo: false, plan: planNombres[plan], vencimiento: venc, aprobadoEn: ahora };
+
+  // ── Caso especial: reactivar como Demo ──────────────────────────────────
+  // Se resetea creadoEn a ahora, reiniciando el período de prueba (DEMO_DIAS días).
+  // El usuario vuelve a tener exactamente las mismas limitaciones que un demo nuevo.
+  let licData;
+  if (plan === "demo") {
+    licData = {
+      esDemo: true,
+      plan: "demo",
+      creadoEn: ahora,
+      porVida: false,
+      vencimiento: null,  // limpia cualquier vencimiento de plan pago previo
+      aprobadoEn: ahora
+    };
+  } else {
+    const venc = calcularVencimiento(plan);
+    licData = { porVida: false, esDemo: false, plan: planNombres[plan], vencimiento: venc, aprobadoEn: ahora };
+  }
   try {
     const snap = await getDoc(doc(db, "licencias", uid));
     let emailUsuario = null;
