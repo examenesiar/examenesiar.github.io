@@ -2153,6 +2153,17 @@ function renderizarSolicitudesAdmin(snapshot) {
 
 // ======== PANEL ADMINISTRADOR ========
 async function mostrarPanelAdmin() {
+  // BUGFIX: el CSS de las pestañas (.admin-tabs, .admin-tab-panel, etc.) vive
+  // dentro del bloque grande de estilos que inyecta inyectarEstilos(), pero
+  // esa función solo se llamaba desde el flujo de login/solicitud/licencia
+  // vencida. Si el admin ya tenía sesión abierta (ej: recargó la página y la
+  // sesión persistió), mostrarPanelAdmin() podía ejecutarse SIN que ese CSS
+  // estuviera nunca en el <head> → los botones de pestaña no tenían estilo
+  // de pestaña real y, sobre todo, faltaba ".admin-tab-panel{display:none}",
+  // por lo que las 3 secciones (General/Notificaciones/Usuarios) se mostraban
+  // todas apiladas en simultáneo y los clics no producían ningún cambio visible.
+  inyectarEstilos();
+
   if (document.getElementById("admin-overlay")) {
     document.getElementById("admin-overlay").style.display = "flex";
     // Renderizar solicitudes guardadas inmediatamente antes de cargar el resto
