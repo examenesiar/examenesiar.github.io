@@ -1,5 +1,5 @@
 /* ============================================================
-   v4 comentarios.js — Caja de comentarios con hilos para cada examen
+  v7 comentarios.js — Caja de comentarios con hilos para cada examen
    ============================================================
    Requiere que firebase-auth.js ya haya expuesto (en mostrarBarraSesion):
      window._firestoreDB_comentarios  -> instancia Firestore (db)
@@ -151,7 +151,7 @@
     const db = window._firestoreDB_comentarios;
     const user = window._authCurrentUser;
     if (!db || !user) throw new Error('Necesitás iniciar sesión para comentar.');
-    const { collection, addDoc, serverTimestamp } = await _fs();
+    const { collection, addDoc, doc, setDoc, serverTimestamp } = await _fs();
 
     const nombre = (user.email || 'Usuario').split('@')[0];
     const mensajesRef = collection(db, 'comentarios', seccionId, 'mensajes');
@@ -164,8 +164,13 @@
     });
 
     try {
-      const notifRef = collection(db, 'notificaciones_admin');
-      await addDoc(notifRef, {
+      // ID determinístico (en vez de uno random vía addDoc): permite borrar
+      // la notificación directamente por su ID cuando se borra el comentario,
+      // sin necesitar permiso de LECTURA sobre notificaciones_admin (que el
+      // autor del comentario no tiene — solo el admin puede leer esa
+      // colección). Con un ID derivado, el delete es directo y determinístico.
+      const notifId = 'com_' + seccionId + '_' + nuevoDoc.id;
+      await setDoc(doc(db, 'notificaciones_admin', notifId), {
         tipo: 'comentario',
         mensajeId: nuevoDoc.id,
         seccionId,
@@ -197,6 +202,18 @@
     const db = window._firestoreDB_comentarios;
     const { doc, deleteDoc, collection, addDoc, serverTimestamp } = await _fs();
     await deleteDoc(doc(db, 'comentarios', seccionId, 'mensajes', mensajeId));
+
+    // Borrar la notificación admin asociada a este comentario (si existe).
+    // ID determinístico (ver _crearComentario) → delete directo, sin
+    // necesitar permiso de LECTURA sobre notificaciones_admin: tanto el
+    // admin como el propio autor (borrando su comentario) pueden llegar acá.
+    try {
+      const notifId = 'com_' + seccionId + '_' + mensajeId;
+      await deleteDoc(doc(db, 'notificaciones_admin', notifId));
+    } catch (e) {
+      // Puede no existir (ej: notificación ya estaba borrada) — no es un error real.
+      console.warn('[Comentarios] No se pudo borrar la notificación asociada:', e.message);
+    }
 
     // Registro de auditoría: solo cuando el admin borra un comentario AJENO
     // (si el propio usuario borra el suyo, no es un acto de moderación).
@@ -307,7 +324,14 @@
           await _crearComentario(seccionId, texto, btn.dataset.parent);
           await renderCajaComentarios(seccionId, anchorNode);
         } catch (e) {
-          alert(e.message || 'Error al enviar la respuesta.');
+          const esErrorPermisos = e && (e.code === 'permission-denied' ||
+            /missing or insufficient permissions/i.test(e.message || ''));
+          if (esErrorPermisos) {
+            alert('🔒 Los comentarios están disponibles solo para usuarios con licencia completa.');
+            if (window.mostrarModalRestriccionDemo) window.mostrarModalRestriccionDemo();
+          } else {
+            alert(e.message || 'No se pudo enviar la respuesta. Intentá nuevamente.');
+          }
           btn.disabled = false;
         }
       });
@@ -482,8 +506,20 @@
         textarea.value = '';
         await renderCajaComentarios(seccionId, anchorNode);
       } catch (e) {
-        errorDiv.textContent = e.message || 'No se pudo publicar el comentario.';
-        errorDiv.style.display = 'block';
+        // Error de permisos de Firestore (ej: demo intentando comentar pese al
+        // bloqueo visual, o cualquier otro caso de licencia no válida) → mensaje
+        // en español acorde a la app, y se ofrece el plan completo en vez de
+        // mostrar el error técnico crudo en inglés.
+        const esErrorPermisos = e && (e.code === 'permission-denied' ||
+          /missing or insufficient permissions/i.test(e.message || ''));
+        if (esErrorPermisos) {
+          errorDiv.textContent = '🔒 Los comentarios están disponibles solo para usuarios con licencia completa.';
+          errorDiv.style.display = 'block';
+          if (window.mostrarModalRestriccionDemo) window.mostrarModalRestriccionDemo();
+        } else {
+          errorDiv.textContent = e.message || 'No se pudo publicar el comentario. Intentá nuevamente.';
+          errorDiv.style.display = 'block';
+        }
       } finally {
         btnEnviar.disabled = false;
       }
