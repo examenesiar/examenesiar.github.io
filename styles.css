@@ -1,4 +1,4 @@
-/* V3 ===== VARIABLES - PALETA PROFESIONAL AZUL OSCURO Y GRIS ===== */
+/* V6 ===== VARIABLES - PALETA PROFESIONAL AZUL OSCURO Y GRIS ===== */
 :root {
     /* Paleta principal - azul marino */
     --primary-color: #2563eb;        /* Azul principal */
@@ -750,6 +750,30 @@ img {
 }
 .btn-buscador:hover { background: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%); transform: translateY(-2px); }
 .btn-buscador:active { transform: translateY(0); }
+
+/* ===== BOTÓN SUGERENCIAS (fijo en el menú, debajo de la caja de Visitas) =====
+   Antes era un botón flotante (position:fixed) junto a "Ver mi progreso";
+   en pantallas angostas (celular) quedaba tapado/fuera de la vista. Misma
+   función y mismo tamaño que antes — solo cambió de posición a estática,
+   dentro del flujo normal del menú, para que se vea en todos los dispositivos. */
+.btn-flotante-sugerencias {
+    padding: 10px 14px;
+    border: none;
+    border-radius: 999px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.15);
+    cursor: pointer;
+    font-weight: bold;
+    background: #ea580c;
+    color: #fff;
+    white-space: nowrap;
+    font-size: 0.9375rem;
+    transition: all 0.2s ease;
+}
+.btn-flotante-sugerencias:hover {
+    background: #c2410c;
+    transform: translateY(-1px);
+}
+.btn-flotante-sugerencias:active { transform: translateY(0); }
 
 .btn-volver-buscador {
     position: fixed;
