@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IAR - Exámenes de Residencias Médicas</title>
-    <link rel="stylesheet" href="styles.css?v=4">
+    <link rel="stylesheet" href="styles.css?v=5">
     <style>
         /* Prevenir selección de texto */
         * {
@@ -134,6 +134,19 @@
             })();
             </script>
         </div>
+
+        <!-- Botón de Sugerencias: fijo en el menú principal, debajo de la caja
+             de Visitas. Antes era un botón flotante (junto a "Ver mi progreso")
+             que en pantallas angostas (celular) quedaba tapado/cortado fuera
+             de la vista. Misma función y tamaño que antes, solo cambia la
+             ubicación. Visible para cualquier usuario logueado (igual que
+             antes); si es usuario demo, el panel que se abre ya bloquea el
+             formulario de envío (ver sugerencias.js). -->
+        <div id="btn-sugerencias-menu-wrap" style="text-align:center; margin-top:14px; display:none;">
+            <button id="btn-sugerencias-menu" class="btn-flotante-sugerencias" onclick="window.IARSugerencias && window.IARSugerencias.abrirPanelUsuario && window.IARSugerencias.abrirPanelUsuario()">
+                🟧 Sugerencias
+            </button>
+        </div>
     </div>
 
     <!-- ======== BUSCADOR DE PREGUNTAS ======== -->
@@ -157,6 +170,7 @@
     <button id="btn-volver-buscador" class="btn-volver-buscador" onclick="volverAlBuscador()" style="display:none;">
         ← Volver al Buscador
     </button>
+
 
     <!-- ======== SUBMENÚ IAR ======== -->
     <div id="iar-submenu" class="menu-principal" style="display: none;">
@@ -1209,15 +1223,15 @@
     </div>
 
 <!-- Sistema de autenticación Firebase (debe cargar antes que script.js) -->
-    <script type="module" src="firebase-auth.js?v=6"></script>
+    <script type="module" src="firebase-auth.js?v=5"></script>
     <script defer src="filtro_palabras.js?v=1"></script>
     <!-- Módulo de comentarios (debe cargar antes que script.js) -->
     <script defer src="comentarios.js?v=5"></script>
     <!-- Módulo de sugerencias privadas usuario↔admin (debe cargar antes que script.js) -->
     <script defer src="sugerencias.js?v=5"></script>
     <!-- Script principal de la aplicación -->
-    <script defer src="script.js?v=4"></script>
-    <script defer src="script_onebyone.js?v=4"></script>
+    <script defer src="script.js?v=5"></script>
+    <script defer src="script_onebyone.js?v=5"></script>
 
     <script>
         // Medidas de seguridad adicionales
