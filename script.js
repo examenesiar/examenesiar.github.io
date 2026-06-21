@@ -1,4 +1,4 @@
-//Scritp V4
+//Scritp V7
 if (typeof preguntasPorSeccion === 'undefined') {
   var preguntasPorSeccion = {};
 }
@@ -2401,11 +2401,13 @@ function _hayProgresoEnStorage(seccionId) {
   };
 
   function buildProgressUI() {
-    // ======== Contenedor común para los botones flotantes del menú principal ========
-    // "Ver mi progreso" y "Sugerencias" viven dentro de un mismo contenedor flex,
-    // así su posición relativa nunca depende de cálculos de ancho en tiempo de
-    // ejecución (offsetWidth puede no estar listo aún) ni se solapan entre sí
-    // ni con la barra de sesión fija (#barra-sesion, bottom:0, ~38-46px alto).
+    // ======== Contenedor del botón flotante "Ver mi progreso" ========
+    // El botón "Sugerencias" se movió fuera de este contenedor flotante:
+    // ahora vive FIJO en el menú principal, debajo de la caja de Visitas
+    // (ver #btn-sugerencias-menu-wrap en index.html). El motivo: en pantallas
+    // angostas (celular), ambos botones en un mismo contenedor "fixed;right:16px"
+    // se desbordaban fuera del viewport por la izquierda y "Sugerencias"
+    // quedaba tapado/inaccesible. Misma función y tamaño, solo cambió la ubicación.
     const contFlotantes = document.createElement("div");
     contFlotantes.id = "cont-botones-flotantes-menu";
     contFlotantes.style.position = "fixed";
@@ -2432,45 +2434,12 @@ function _hayProgresoEnStorage(seccionId) {
     btn.style.whiteSpace = "nowrap";
     contFlotantes.appendChild(btn);
 
-    // ======== Botón flotante "Sugerencias" — a la izquierda de "Ver mi progreso" ========
-    // Solo existe en el menú principal (igual que "Ver mi progreso"); no aparece
-    // en submenús ni dentro de los cuestionarios. Al estar ANTES en el DOM
-    // dentro del mismo contenedor flex (row), queda automáticamente a la
-    // izquierda, sin necesidad de recalcular posiciones.
-    const btnSugerencias = document.createElement("button");
-    btnSugerencias.id = "btn-ver-sugerencias";
-    btnSugerencias.textContent = "🟧 Sugerencias";
-    btnSugerencias.style.padding = "10px 14px";
-    btnSugerencias.style.border = "none";
-    btnSugerencias.style.borderRadius = "999px";
-    btnSugerencias.style.boxShadow = "0 4px 12px rgba(0,0,0,.15)";
-    btnSugerencias.style.cursor = "pointer";
-    btnSugerencias.style.fontWeight = "bold";
-    btnSugerencias.style.background = "#ea580c";
-    btnSugerencias.style.color = "#fff";
-    btnSugerencias.style.whiteSpace = "nowrap";
-    btnSugerencias.addEventListener("click", function() {
-      if (window.IARSugerencias && typeof window.IARSugerencias.abrirPanelUsuario === "function") {
-        window.IARSugerencias.abrirPanelUsuario();
-      }
-    });
-    // Insertar ANTES de "Ver mi progreso" para que quede a su izquierda
-    contFlotantes.insertBefore(btnSugerencias, btn);
-
-    // Red de seguridad: además de los puntos explícitos donde se oculta/muestra
-    // el contenedor de botones flotantes, observamos la clase "oculto" del menú
-    // principal para mantenerlo sincronizado ante cualquier otro flujo de
-    // navegación (cierre de sesión, restricción demo, etc.) que no lo haya
-    // tocado a mano. Como ambos botones viven en el mismo contenedor flex,
-    // alcanza con togglear un solo display — ya no hace falta recalcular anchos.
-    const menuPrincipalEl = document.getElementById("menu-principal");
-    if (menuPrincipalEl && window.MutationObserver) {
-      const obs = new MutationObserver(function() {
-        const visible = !menuPrincipalEl.classList.contains("oculto");
-        contFlotantes.style.display = visible ? "flex" : "none";
-      });
-      obs.observe(menuPrincipalEl, { attributes: true, attributeFilter: ["class"] });
-    }
+    // ======== Botón fijo "Sugerencias" (en el menú, debajo de Visitas) ========
+    // El <button> y su wrapper ya están en el HTML (#btn-sugerencias-menu-wrap
+    // / #btn-sugerencias-menu). Acá solo lo mostramos, ya que el wrapper
+    // arranca oculto en el HTML (display:none) hasta que el menú está listo.
+    const wrapSugerencias = document.getElementById("btn-sugerencias-menu-wrap");
+    if (wrapSugerencias) wrapSugerencias.style.display = "block";
 
     const panel = document.createElement("div");
     panel.id = "panel-progreso";
