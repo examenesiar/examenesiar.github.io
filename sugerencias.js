@@ -1,5 +1,5 @@
 /* ============================================================
-   v3 sugerencias.js — Canal privado de sugerencias usuario <-> admin
+   v4 sugerencias.js — Canal privado de sugerencias usuario <-> admin
    ============================================================
    Requiere que firebase-auth.js ya haya expuesto:
      window._firestoreDB_comentarios  -> instancia Firestore (db)
@@ -18,7 +18,11 @@
 
    Cambios v2:
      - Filtro de lenguaje inapropiado vía window.IARFiltro (filtro_palabras.js).
-       (Los usuarios demo SÍ pueden enviar sugerencias — sin restricción aquí.)
+   Cambios v3:
+     - Los usuarios demo YA NO pueden enviar sugerencias ni responder en su
+       propio hilo (mismo criterio que Comentarios). Bloqueo aplicado acá en
+       el frontend (formulario deshabilitado) y en las reglas de Firestore
+       (REGLA 20: allow create exige tieneLicenciaCompleta(uid) o esAdmin()).
 
    Estructura en Firestore (coherente con reglas_firestore_database_18):
      sugerencias/{sugerenciaId}
@@ -425,6 +429,15 @@
         }));
         lista.innerHTML = partes.join('');
         _adjuntarEventosHilo(lista, false, _refrescarLista);
+        // Si es demo, también bloquear el campo de respuesta de cada hilo
+        // ya existente (por si tenía sugerencias de antes de esta restricción).
+        if (esDemoPanel) {
+          lista.querySelectorAll('.sug-reply-row textarea').forEach(ta => {
+            ta.disabled = true;
+            ta.placeholder = '🔒 No disponible para usuarios demo.';
+          });
+          lista.querySelectorAll('.sug-btn-reply').forEach(btn => { btn.disabled = true; });
+        }
       } catch (e) {
         // 'failed-precondition' = falta el índice compuesto (uid + fecha_creacion)
         // en Firestore. Es un problema de configuración del proyecto, no del código.
@@ -442,7 +455,28 @@
     const taNuevo = document.getElementById('sug-nuevo-mensaje');
     const errorDiv = document.getElementById('sug-nuevo-error');
 
+    // ── Bloqueo visual del form si el usuario es demo ──
+    // (Comentarios ya estaba restringido; Sugerencias también lo está desde
+    // las reglas de Firestore. Acá solo evitamos que el demo escriba todo el
+    // mensaje y recién al enviar se entere de que no tiene permiso.)
+    const esAdminPanel = !!window._esAdmin;
+    const licenciaPanel = window._licenciaActual;
+    const esDemoPanel = !esAdminPanel && licenciaPanel && licenciaPanel.esDemo === true;
+
+    if (esDemoPanel) {
+      taNuevo.disabled = true;
+      taNuevo.placeholder = '🔒 Los usuarios demo no tienen acceso al canal de Sugerencias.';
+      btnCrear.disabled = true;
+      btnCrear.title = 'Disponible con licencia completa';
+      const aviso = document.createElement('p');
+      aviso.className = 'sug-msg-error';
+      aviso.style.cssText = 'display:block;margin-top:4px;';
+      aviso.textContent = '⚠️ El canal de Sugerencias está disponible solo para usuarios con licencia completa.';
+      taNuevo.parentElement.appendChild(aviso);
+    }
+
     btnCrear.addEventListener('click', async () => {
+      if (esDemoPanel) return; // doble protección
       errorDiv.style.display = 'none';
       const mensaje = taNuevo.value.trim();
       if (mensaje.length < 5) {
