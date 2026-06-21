@@ -1,4 +1,4 @@
-/* v6 ========== firebase-auth.js ==========
+/* v7 ========== firebase-auth.js ==========
    Sistema de autenticación con Firebase
    - Login con email y contraseña
    - Sesión única por dispositivo
@@ -1767,6 +1767,14 @@ function mostrarPantallaBienvenida(uid, fnIrAlMenu) {
 function mostrarBarraSesion(email, licencia) {
   // Exponer si es admin para que script.js pueda usarlo
   window._esAdmin = (email === ADMIN_EMAIL);
+  // BUGFIX: esta variable nunca se exponía a window, solo existía como
+  // variable de módulo (`licenciaActual`, sin "window."). Como resultado,
+  // comentarios.js y sugerencias.js — que SÍ leen window._licenciaActual
+  // para bloquear visualmente el formulario a usuarios demo — siempre veían
+  // "undefined", por lo que el bloqueo nunca se activaba: un demo podía
+  // escribir y enviar, y recién Firestore lo rechazaba con un error crudo
+  // en inglés ("Missing or insufficient permissions").
+  window._licenciaActual = licencia;
   // Exponer DB y usuario para el módulo de comentarios (integrado en script_onebyone.js)
   window._firestoreDB_comentarios = db;
   window._rtdbInstance = rtdb;
@@ -2645,29 +2653,37 @@ async function _cargarNotificacionesAdmin() {
 }
 
 function _renderNotifComentarioAdmin(n) {
-  const noLeidoStyle = n.leido ? '' : 'background:#eff6ff;border-left:3px solid #1e40af;';
+  // No leído: fondo celeste claro + borde lateral azul (llama la atención).
+  // Leído: fondo gris claro, sin borde de color — igual que el patrón de
+  // "leído/no leído" de redes sociales (blanco → gris al abrir).
+  const estiloEstado = n.leido
+    ? 'background:#f1f5f9;'
+    : 'background:#eff6ff;border-left:3px solid #1e40af;';
   return `
     <div class="admin-notif-item" data-seccion="${n.seccionId || ''}" data-mensaje="${n.mensajeId || ''}" data-notif-id="${n.id}"
-      style="padding:9px 12px;border-radius:7px;margin-bottom:6px;cursor:pointer;border:1px solid #e2e8f0;${noLeidoStyle}">
+      style="padding:9px 12px;border-radius:7px;margin-bottom:6px;cursor:pointer;border:1px solid #e2e8f0;${estiloEstado}">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-        <span style="font-weight:700;font-size:.82rem;color:#1e3a8a;">${_escapeHTMLAdmin(n.nombre || 'Usuario')}</span>
+        <span style="font-weight:700;font-size:.82rem;color:${n.leido ? '#64748b' : '#1e3a8a'};">${_escapeHTMLAdmin(n.nombre || 'Usuario')}</span>
         <span style="font-size:.7rem;color:#94a3b8;">${_fechaCortaAdmin(n.ts)}</span>
       </div>
       <div style="font-size:.78rem;color:#64748b;margin-top:2px;">Examen: ${_escapeHTMLAdmin(n.seccionId || '-')}${n.parentId ? ' · respuesta' : ''}</div>
-      <div style="font-size:.84rem;color:#1e293b;margin-top:3px;">${_escapeHTMLAdmin(_truncarAdmin(n.texto || '', 140))}</div>
+      <div style="font-size:.84rem;color:${n.leido ? '#64748b' : '#1e293b'};margin-top:3px;">${_escapeHTMLAdmin(_truncarAdmin(n.texto || '', 140))}</div>
     </div>`;
 }
 
 function _renderNotifSugerenciaAdmin(n) {
-  const noLeidoStyle = n.leido ? '' : 'background:#fff7ed;border-left:3px solid #ea580c;';
+  // Mismo criterio que comentarios: leído = gris, no leído = color de categoría.
+  const estiloEstado = n.leido
+    ? 'background:#f1f5f9;'
+    : 'background:#fff7ed;border-left:3px solid #ea580c;';
   return `
     <div class="admin-notif-item" data-sugerencia="${n.sugerenciaId || ''}" data-notif-id="${n.id}"
-      style="padding:9px 12px;border-radius:7px;margin-bottom:6px;cursor:pointer;border:1px solid #fed7aa;${noLeidoStyle}">
+      style="padding:9px 12px;border-radius:7px;margin-bottom:6px;cursor:pointer;border:1px solid #fed7aa;${estiloEstado}">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-        <span style="font-weight:700;font-size:.82rem;color:#9a3412;">${_escapeHTMLAdmin(n.nombre || 'Usuario')}</span>
+        <span style="font-weight:700;font-size:.82rem;color:${n.leido ? '#64748b' : '#9a3412'};">${_escapeHTMLAdmin(n.nombre || 'Usuario')}</span>
         <span style="font-size:.7rem;color:#94a3b8;">${_fechaCortaAdmin(n.ts)}</span>
       </div>
-      <div style="font-size:.84rem;color:#1e293b;margin-top:3px;">${_escapeHTMLAdmin(_truncarAdmin(n.texto || '', 140))}</div>
+      <div style="font-size:.84rem;color:${n.leido ? '#64748b' : '#1e293b'};margin-top:3px;">${_escapeHTMLAdmin(_truncarAdmin(n.texto || '', 140))}</div>
     </div>`;
 }
 
@@ -3574,9 +3590,30 @@ function iniciarMonitoreoSesion(user) {
   );
 
   // ── HEARTBEAT ────────────────────────────────────────────────────────
-  // Actualiza lastActivity cada 60s. Se pausa cuando la pestaña está oculta
-  // para evitar escrituras innecesarias.
+  // OPTIMIZADO — antes: cada 60s hacía 1 lectura (getDoc, innecesaria — el
+  // dato no se usaba para nada que el propio onSnapshot no cubra ya) + 1
+  // escritura, SIEMPRE, hubiera o no actividad real del usuario. A escala
+  // (ej. 50 usuarios x 6hs/día) eso solo ya representa ~18.000 lecturas +
+  // ~18.000 escrituras por día — cerca del 90% de la cuota gratuita diaria
+  // de escrituras de Firestore, sin contar nada más del resto de la app.
+  //
+  // Ahora:
+  //   1) Sin getDoc previo — se escribe directo con merge:true (el admin ya
+  //      tiene su propio deviceId en memoria, no hace falta leerlo de vuelta).
+  //   2) Solo escribe si hubo actividad real del usuario (mousemove, click,
+  //      scroll, etc. — ya trackeado en `ultimaActividad` por
+  //      registrarActividad(), sin costo de Firestore) desde la última
+  //      escritura. Si el usuario está quieto leyendo una pregunta, no se
+  //      escribe nada — no hace falta, nadie va a competir por la sesión.
+  //   3) Intervalo de chequeo a 2 minutos (igual al umbral de gracia que ya
+  //      usa el sistema para considerar una sesión "abandonada"), en vez de
+  //      cada 60s — el chequeo en sí es gratis (JS local), pero menos
+  //      invocaciones es menos trabajo igual.
+  // La detección de "sesión robada" sigue siendo INSTANTÁNEA en todo
+  // momento vía el listener onSnapshot de arriba — el heartbeat nunca tuvo
+  // ese rol, solo mantenía lastActivity al día.
   let _heartbeatPausado = false;
+  let _ultimaEscrituraHeartbeat = 0; // timestamp (ms) de la última escritura real
 
   function _onVisibilityChange() {
     if (document.visibilityState === 'hidden') {
@@ -3593,23 +3630,24 @@ function iniciarMonitoreoSesion(user) {
     document.removeEventListener('visibilitychange', _onVisibilityChange);
   };
 
+  const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000; // 2 minutos
+
   monitoreoInterval = setInterval(async () => {
     if (_heartbeatPausado || document.visibilityState === 'hidden') return;
     if (!auth.currentUser) return;
+    // Sin actividad real desde la última escritura → no hace falta escribir.
+    if (ultimaActividad <= _ultimaEscrituraHeartbeat) return;
     try {
-      const snap = await getDoc(sessionRef);
-      if (!snap.exists()) return; // onSnapshot ya lo detectó o lo detectará
-      const data = snap.data();
       const esAdmin = user.email === ADMIN_EMAIL;
-      // Admin: sincronizar deviceId en heartbeat. Usuario: solo actualizar lastActivity.
       const updateData = esAdmin
-        ? { ...data, deviceId, lastActivity: serverTimestamp() }
-        : { ...data, lastActivity: serverTimestamp() };
-      await setDoc(sessionRef, updateData);
+        ? { deviceId, lastActivity: serverTimestamp() }
+        : { lastActivity: serverTimestamp() };
+      await setDoc(sessionRef, updateData, { merge: true });
+      _ultimaEscrituraHeartbeat = Date.now();
     } catch (err) {
       console.warn("[IAR] Error en heartbeat:", err.code || err.message);
     }
-  }, 60000);
+  }, HEARTBEAT_INTERVAL_MS);
 }
 
 function limpiarUI() {
@@ -3625,6 +3663,7 @@ function limpiarUI() {
   window._demoCheckEnabled = false;
   window._firestoreDB_comentarios = null;
   window._authCurrentUser = null;
+  window._licenciaActual = null;
   licenciaActual = null;
 
   // ── Restaurar funciones parcheadas por el modo demo ──
