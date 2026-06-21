@@ -1,5 +1,5 @@
 /* ============================================================
-   v4 sugerencias.js — Canal privado de sugerencias usuario <-> admin
+   v7 sugerencias.js — Canal privado de sugerencias usuario <-> admin
    ============================================================
    Requiere que firebase-auth.js ya haya expuesto:
      window._firestoreDB_comentarios  -> instancia Firestore (db)
@@ -231,13 +231,24 @@
 
   // Solo el admin puede eliminar una sugerencia (moderación). Queda registro
   // en auditoria_eliminaciones, ya que es una acción irreversible sobre
-  // contenido ajeno.
+  // contenido ajeno. También se borran las notificaciones admin asociadas
+  // (de la sugerencia y de cada una de sus respuestas), para que no quede
+  // "fantasma" en la lista de Notificaciones apuntando a algo que ya no existe.
   async function _eliminarSugerencia(sugerencia) {
     const db = window._firestoreDB_comentarios;
     const admin = window._authCurrentUser;
-    const { doc, deleteDoc, collection, addDoc, serverTimestamp } = await _fs();
+    const { doc, deleteDoc, collection, addDoc, serverTimestamp, getDocs, query, where } = await _fs();
 
     await deleteDoc(doc(db, 'sugerencias', sugerencia.id));
+
+    // Borrar notificaciones admin de esta sugerencia (la inicial y sus respuestas)
+    try {
+      const notifQ = query(collection(db, 'notificaciones_admin'), where('sugerenciaId', '==', sugerencia.id));
+      const notifSnap = await getDocs(notifQ);
+      await Promise.all(notifSnap.docs.map(d => deleteDoc(doc(db, 'notificaciones_admin', d.id))));
+    } catch (e) {
+      console.warn('[Sugerencias] No se pudieron borrar las notificaciones asociadas:', e.message);
+    }
 
     try {
       await addDoc(collection(db, 'auditoria_eliminaciones'), {
@@ -338,7 +349,14 @@
           ta.value = '';
           if (typeof onUpdate === 'function') await onUpdate();
         } catch (e) {
-          alert('No se pudo enviar: ' + (e.message || ''));
+          const esErrorPermisos = e && (e.code === 'permission-denied' ||
+            /missing or insufficient permissions/i.test(e.message || ''));
+          if (!esAdmin && esErrorPermisos) {
+            alert('🔒 El canal de Sugerencias está disponible solo para usuarios con licencia completa.');
+            if (window.mostrarModalRestriccionDemo) window.mostrarModalRestriccionDemo();
+          } else {
+            alert(e.message ? ('No se pudo enviar: ' + e.message) : 'No se pudo enviar. Intentá nuevamente.');
+          }
         } finally {
           btn.disabled = false;
         }
@@ -496,8 +514,19 @@
         taNuevo.value = '';
         await _refrescarLista();
       } catch (e) {
-        errorDiv.textContent = e.message || 'No se pudo enviar la sugerencia.';
-        errorDiv.style.display = 'block';
+        // Error de permisos de Firestore (ej: demo intentando enviar pese al
+        // bloqueo visual) → mensaje en español acorde a la app + oferta del
+        // plan completo, en vez del error técnico crudo en inglés.
+        const esErrorPermisos = e && (e.code === 'permission-denied' ||
+          /missing or insufficient permissions/i.test(e.message || ''));
+        if (esErrorPermisos) {
+          errorDiv.textContent = '🔒 El canal de Sugerencias está disponible solo para usuarios con licencia completa.';
+          errorDiv.style.display = 'block';
+          if (window.mostrarModalRestriccionDemo) window.mostrarModalRestriccionDemo();
+        } else {
+          errorDiv.textContent = e.message || 'No se pudo enviar la sugerencia. Intentá nuevamente.';
+          errorDiv.style.display = 'block';
+        }
       } finally {
         btnCrear.disabled = false;
       }
