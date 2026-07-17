@@ -1,5 +1,5 @@
 /* ============================================================
-  v7 comentarios.js — Caja de comentarios con hilos para cada examen
+  v8 comentarios.js — Caja de comentarios con hilos para cada examen
    ============================================================
    Requiere que firebase-auth.js ya haya expuesto (en mostrarBarraSesion):
      window._firestoreDB_comentarios  -> instancia Firestore (db)
@@ -84,12 +84,14 @@
         position:absolute; top:100%; left:0; margin-top:4px; z-index:50;
         background:#fff; border:1.5px solid #cbd5e1; border-radius:10px;
         box-shadow:0 8px 20px rgba(0,0,0,.15); padding:8px;
-        display:grid; grid-template-columns:repeat(8, 1fr); gap:2px;
+        display:grid; grid-template-columns:repeat(8, 32px); justify-content:center; gap:2px;
         width:280px; max-width:90vw;
       }
       .com-emoji-picker.oculto { display:none; }
       .com-emoji-picker button {
-        background:none; border:none; font-size:1.15rem; padding:4px;
+        display:flex; align-items:center; justify-content:center;
+        width:32px; height:32px;
+        background:none; border:none; font-size:1.15rem;
         cursor:pointer; border-radius:6px; line-height:1;
       }
       .com-emoji-picker button:hover { background:#f1f5f9; }
