@@ -84,7 +84,7 @@
         position:absolute; top:100%; left:0; margin-top:4px; z-index:50;
         background:#fff; border:1.5px solid #cbd5e1; border-radius:10px;
         box-shadow:0 8px 20px rgba(0,0,0,.15); padding:8px;
-        display:grid; grid-template-columns:repeat(10, 1fr); gap:2px;
+        display:grid; grid-template-columns:repeat(8, 1fr); gap:2px;
         width:280px; max-width:90vw;
       }
       .com-emoji-picker.oculto { display:none; }
